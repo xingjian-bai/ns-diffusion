@@ -16,15 +16,21 @@ def random_colour():
     return tuple(np.random.randint(40, 200, 3))
 
 class BoundingBox:
-    def __init__(self, pos, pos_type = "lurb", color=None):
+    def __init__(self, pos, pos_type = "cwh", color=None):
         """
         self.pos: [cx, cy, w, h]
         """
+
+        # if list, turn to tensor
+        if isinstance(pos, list):
+            pos = torch.tensor(pos)
+
+            
         assert len(pos) == 4
         if pos_type == "lurb":
             self.pos = [(pos[0] + pos[2]) / 2, (pos[1] + pos[3]) / 2, pos[2] - pos[0], pos[3] - pos[1]]
         elif pos_type == "cwh":
-            self.pos = pos
+            self.pos = pos.clone()
         else:
             raise NotImplementedError
         self.color = random_colour() if color is None else color 
@@ -38,12 +44,10 @@ class BoundingBox:
         From [0, 256] to (-1, 1}, from int type to float type
         """
         if self.pos[2] >= 1: # the width is in pixel
-            self.pos[0] = float((self.pos[0] - resolution / 2) / (resolution / 2))
-            self.pos[1] = float((self.pos[1] - resolution / 2) / (resolution / 2))
-            self.pos[2] = float(self.pos[2] / resolution)
-            self.pos[3] = float(self.pos[3] / resolution)
-
-
+            self.pos[0] = float((self.pos[0] / (resolution / 2)) - 1)
+            self.pos[1] = float((self.pos[1] / (resolution / 2)) - 1)
+            self.pos[2] = float((self.pos[2] / (resolution / 2)) - 1)
+            self.pos[3] = float((self.pos[3] / (resolution / 2)) - 1)
 
     def denormalize(self, resolution = 128):
         """
@@ -52,8 +56,8 @@ class BoundingBox:
         if self.pos[2] < 1: # the width is in ratio
             self.pos[0] = int((self.pos[0] + 1) * resolution / 2)
             self.pos[1] = int((self.pos[1] + 1) * resolution / 2)
-            self.pos[2] = int(self.pos[2] * resolution)
-            self.pos[3] = int(self.pos[3] * resolution)
+            self.pos[2] = int((self.pos[2] + 1) * resolution / 2)
+            self.pos[3] = int((self.pos[3] + 1) * resolution / 2)
 
 
     def mse(self, other):
@@ -232,7 +236,7 @@ class RelationalDataset(Dataset):
         # print(self.data.keys())
 
         self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects']] # list of list of objects
-        self.bboxes = [[BoundingBox(bbox) for bbox in bboxes] for bboxes in self.data['bboxes']] # list of list of bboxes
+        self.bboxes = [[BoundingBox(bbox, pos_type="lurb") for bbox in bboxes] for bboxes in self.data['bboxes']] # list of list of bboxes
         for objects, bboxes in zip(self.objects, self.bboxes):
             for obj, bbox in zip(objects, bboxes):
                 obj.equip_bbox(bbox)
