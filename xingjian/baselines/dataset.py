@@ -7,6 +7,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader, Dataset
 from torchvision.utils import make_grid, save_image
 from torchvision import transforms
+from torch.utils.data import Dataset, DataLoader
 
 from utils import *
 
@@ -15,43 +16,66 @@ def random_colour():
     return tuple(np.random.randint(40, 200, 3))
 
 class BoundingBox:
-    def __init__(self, bounds, color=None):
-        assert len(bounds) == 4
-        self.bounds = bounds
+    def __init__(self, pos, pos_type = "lurb", color=None):
+        """
+        self.pos: [cx, cy, w, h]
+        """
+        assert len(pos) == 4
+        if pos_type == "lurb":
+            self.pos = [(pos[0] + pos[2]) / 2, (pos[1] + pos[3]) / 2, pos[2] - pos[0], pos[3] - pos[1]]
+        elif pos_type == "cwh":
+            self.pos = pos
+        else:
+            raise NotImplementedError
         self.color = random_colour() if color is None else color 
     
     def tensorize(self):
         self.normalize()
-        return torch.tensor(self.bounds)
+        return torch.tensor(self.pos)
 
     def normalize(self, resolution = 128):
         """
         From [0, 256] to (-1, 1}, from int type to float type
         """
-        if max(self.bounds) >= 1:
-            self.bounds = [float((x - resolution / 2) / (resolution / 2)) for x in self.bounds]
+        if self.pos[2] >= 1: # the width is in pixel
+            self.pos[0] = float((self.pos[0] - resolution / 2) / (resolution / 2))
+            self.pos[1] = float((self.pos[1] - resolution / 2) / (resolution / 2))
+            self.pos[2] = float(self.pos[2] / resolution)
+            self.pos[3] = float(self.pos[3] / resolution)
+
 
 
     def denormalize(self, resolution = 128):
         """
         From (-1, 1} to [0, 256], from float type to int type
         """
-        if max(self.bounds) < 1:
-            self.bounds = [int((x + 1) * (resolution / 2)) for x in self.bounds]
+        if self.pos[2] < 1: # the width is in ratio
+            self.pos[0] = int((self.pos[0] + 1) * resolution / 2)
+            self.pos[1] = int((self.pos[1] + 1) * resolution / 2)
+            self.pos[2] = int(self.pos[2] * resolution)
+            self.pos[3] = int(self.pos[3] * resolution)
+
 
     def mse(self, other):
         self.normalize()
-        return np.square(np.subtract(self.bounds, other.bounds)).mean()
+        return np.square(np.subtract(self.pos, other.pos)).mean()
     
-    def draw(self, image = Image.new("RGB", (128, 128), (255, 255, 255))):
+    def draw(self, image = Image.new("RGB", (128, 128), (255, 255, 255)), color = None):
         self.denormalize()
+        image = image.copy()
         draw = ImageDraw.Draw(image)
-        # print(f"before draw, bounds = {self.bounds}")
-        draw.rectangle((self.bounds[0],self.bounds[1],self.bounds[2],self.bounds[3]) , outline=self.color, width=1)
+        #clip to [0, resolution
+        left = self.pos[0] - self.pos[2] / 2
+        top = self.pos[1] - self.pos[3] / 2
+        right = self.pos[0] + self.pos[2] / 2
+        bottom = self.pos[1] + self.pos[3] / 2
+
+        # print("draw bbox: ", left, top, right, bottom, "from", self.pos)
+        draw.rectangle([left, top, right, bottom], outline=self.color if color is None else color)
         return image
 
     def __str__(self) -> str:
-        return f"BBOX({self.bounds[0]}, {self.bounds[1]}) - ({self.bounds[2]}, {self.bounds[3]})"
+        return f"BBOX(cx={self.pos[0]}, cy={self.pos[1]}, w={self.pos[2]}, h={self.pos[3]})"
 
 def draw_bboxes(bboxes, image = Image.new("RGB", (128, 128), (255, 255, 255))):
     image = image.copy()
@@ -129,8 +153,8 @@ class Relation:
     
     def draw_relation(self, image, thickness=1):
         # calculate the center of the bounding boxes
-        c1x, c1y = (int((self.obj1.bbox.bounds[0] + self.obj1.bbox.bounds[2]) / 2), int((self.obj1.bbox.bounds[1] + self.obj1.bbox.bounds[3]) / 2))
-        c2x, c2y = (int((self.obj2.bbox.bounds[0] + self.obj2.bbox.bounds[2]) / 2), int((self.obj2.bbox.bounds[1] + self.obj2.bbox.bounds[3]) / 2))
+        c1x, c1y = self.obj1.bbox.pos[0], self.obj1.bbox.pos[1]
+        c2x, c2y = self.obj2.bbox.pos[0], self.obj2.bbox.pos[1]
 
         draw = ImageDraw.Draw(image)
         draw.line((c1x, c1y, c2x, c2y), fill=self.colour, width=thickness)
@@ -145,7 +169,7 @@ def annotate(image, relations, objects):
     return image_with_annotation
 
 def prompt(objects = [], relations = []):
-    return ", AND ".join([str(rel) for rel in relations if rel.relation_idx != 6]) + " AND " + ", AND ".join([str(obj) for obj in objects])
+    return ", AND ".join([str(rel) for rel in relations if rel.relation_idx != 6]) + ", AND ".join([str(obj) for obj in objects])
 
 def gen_rand_object():
     color_idx = np.random.randint(0, len(Object.colors))
@@ -183,10 +207,9 @@ class RelationalDataset(Dataset):
         relations = []
         for i in range (len(raw_relations)):
             for j in range (len(raw_relations[i])):
-                if i > j:
+                if i >= j:
                     continue 
                 if self.pick_one_relation:
-                    # randomly pick one non-zero index in raw_relations[i][j]
                     idx = np.random.choice(np.nonzero(raw_relations[i][j])[0]) if np.sum(raw_relations[i][j]) > 0 else 6
                     relations.append(Relation(idx, raw_objects[i], raw_objects[j]))
                 else:
@@ -199,6 +222,7 @@ class RelationalDataset(Dataset):
         uncond_image_type="original",
         center_crop=True,
         pick_one_relation=True,
+        image_path = None
     ):
         self.center_crop = center_crop
         self.data = np.load(data_path)
@@ -214,8 +238,14 @@ class RelationalDataset(Dataset):
                 obj.equip_bbox(bbox)
         
         if "images" in self.data.keys():
+            print("Loading images from data")
             self.images = [Image.fromarray(image) for image in self.data['images']]
+        elif image_path is not None:
+            print("Loading images from image_path")
+            self.image_data = np.load(image_path)
+            self.images = [Image.fromarray(image) for image in self.image_data['images']]
         else:
+            print("Generating images from bboxes")
             self.images = [draw_bboxes(bboxes) for bboxes in self.bboxes]
 
         self.relations = [self.formula_to_image(raw_relations, raw_objects) for raw_relations, raw_objects in zip(self.data['relations'], self.objects)]
@@ -250,24 +280,20 @@ class RelationalDataset(Dataset):
             raise NotImplementedError
 
         objects = torch.stack([object.tensorize() for object in self.objects[idx]])
-        relations = torch.stack([relation.tensorize() for relation in self.relations[idx]])
+        if len(self.relations[idx]) > 0:
+            relations = torch.stack([relation.tensorize() for relation in self.relations[idx]])
+        else:
+            relations = torch.zeros((0, 7))
         bboxes = torch.stack([bbox.tensorize() for bbox in self.bboxes[idx]])
         # print(f"in getitem, shapes are {clean_image.shape}, {objects.shape}, {relations.shape}, {bboxes.shape}")
 
         generated_prompt = self.prompts[idx]
 
         # put everythin in a dict
-        sample = {
-            "clean_image": clean_image,
-            "objects": objects,
-            "relations": relations,
-            "bboxes": bboxes,
-            "generated_prompt": generated_prompt,
-            "raw_image": raw_image,
-            "annotated_image": annotated_image,
-        }
 
-        return sample
+        annotated_image_tensor = pil_to_tensor(annotated_image)
+        
+        return clean_image, objects, relations, bboxes, generated_prompt, raw_image, annotated_image_tensor
     
 
 class RelationalDataset2O(RelationalDataset):
@@ -279,6 +305,7 @@ class RelationalDataset2O(RelationalDataset):
 
 class RelationalDataset1O(RelationalDataset):
     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
-        super().__init__(self.path, uncond_image_type, center_crop, pick_one_relation)
-
+        super().__init__(self.path, uncond_image_type, center_crop, pick_one_relation, image_path = self.image_path)
+    

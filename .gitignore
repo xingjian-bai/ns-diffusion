@@ -11,8 +11,12 @@ blender*
 /xingjian/miniconda3
 /xingjian/reduce*
 
+
+.vscode
+
 *wandb*
 *__pycache__*
 *slurm-*.out*
 *ryan-clevr*
 
+results
