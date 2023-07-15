@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.utils import make_grid, save_image
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
 
 from utils import *
 
@@ -26,7 +27,7 @@ class BoundingBox:
             pos = torch.tensor(pos)
 
             
-        assert len(pos) == 4
+        assert len(pos) == 4, f"pos should be a list of length 4, but got {pos}"
         if pos_type == "lurb":
             self.pos = [(pos[0] + pos[2]) / 2, (pos[1] + pos[3]) / 2, pos[2] - pos[0], pos[3] - pos[1]]
         elif pos_type == "cwh":
@@ -127,25 +128,29 @@ class Relation:
             "below": "below",
             "none": "none"
         }
-    colours = [(255, 0, 0),     # Red
-                (0, 255, 0),     # Green
-                (0, 0, 255),     # Blue
-                (255, 255, 0),   # Yellow
-                (0, 255, 255),   # Cyan
-                (255, 0, 255),   # Magenta
-                (0, 0, 0),       # Black
+    colours = [(255, 0, 0),     # Red, left
+                (0, 255, 0),     # Green, right
+                (0, 0, 255),     # Blue, front
+                (255, 255, 0),   # Yellow, behind
+                (0, 255, 255),   # Cyan, below
+                (255, 0, 255),   # Magenta, above
+                (0, 0, 0),       # Black, none
     ]
-    def __init__(self, relation_idx, obj1, obj2):
+    def __init__(self, relation_idx, obj1, obj2, obj_indices):
         self.relation_idx = relation_idx
         self.relation = Relation.relations[relation_idx]
         self.obj1 = obj1
         self.obj2 = obj2
+        self.obj_indices = obj_indices
         self.colour = Relation.colours[relation_idx]
     
     def tensorize(self):
-        ret = torch.tensor([self.relation_idx, *self.obj1.tensorize(), *self.obj2.tensorize()])
+        ret = torch.tensor([*self.obj1.tensorize(), *self.obj2.tensorize(), self.relation_idx])
         assert ret.shape == (9,)
         return ret
+    
+    def indices(self):
+        return torch.tensor(self.obj_indices)
     
     def __str__(self) -> str:
         # relation = Relation.relations[self.relation_idx]
@@ -162,6 +167,21 @@ class Relation:
 
         draw = ImageDraw.Draw(image)
         draw.line((c1x, c1y, c2x, c2y), fill=self.colour, width=thickness)
+
+
+        # Calculate the angle of the line
+        angle = math.atan2(c2y - c1y, c2x - c1x)
+
+        # Calculate the coordinates for the arrow head
+        arrow_size = 5
+        cx = c2x - arrow_size * math.cos(angle + math.pi / 6)
+        cy = c2y - arrow_size * math.sin(angle + math.pi / 6)
+        dx = c2x - arrow_size * math.cos(angle - math.pi / 6)
+        dy = c2y - arrow_size * math.sin(angle - math.pi / 6)
+
+        # Draw the arrow head
+        draw.polygon([c2x, c2y, cx, cy, dx, dy], fill=self.colour)
+
         return image
     
 def annotate(image, relations, objects):
@@ -182,9 +202,9 @@ def gen_rand_object():
     size_idx = np.random.randint(0, len(Object.sizes))
     return Object(color_idx, material_idx, shape_idx, size_idx)
 
-def gen_rand_relation(obj1, obj2):
+def gen_rand_relation(obj1, obj2, id1, id2):
     relation_idx = np.random.randint(0, len(Relation.relations))
-    return Relation(relation_idx, obj1, obj2)
+    return Relation(relation_idx, obj1, obj2, [id1, id2])
 
 def gen_rand_scene(num_objects, num_relations):
     objects = []
@@ -215,7 +235,7 @@ class RelationalDataset(Dataset):
                     continue 
                 if self.pick_one_relation:
                     idx = np.random.choice(np.nonzero(raw_relations[i][j])[0]) if np.sum(raw_relations[i][j]) > 0 else 6
-                    relations.append(Relation(idx, raw_objects[i], raw_objects[j]))
+                    relations.append(Relation(idx, raw_objects[i], raw_objects[j], [i, j]))
                 else:
                     raise NotImplementedError
         return relations
@@ -223,6 +243,8 @@ class RelationalDataset(Dataset):
     def __init__(
         self,
         data_path,
+        split = "train",
+        test_size = 0.2,
         uncond_image_type="original",
         center_crop=True,
         pick_one_relation=True,
@@ -235,24 +257,38 @@ class RelationalDataset(Dataset):
 
         # print(self.data.keys())
 
-        self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects']] # list of list of objects
-        self.bboxes = [[BoundingBox(bbox, pos_type="lurb") for bbox in bboxes] for bboxes in self.data['bboxes']] # list of list of bboxes
+        train_indices, test_indices = train_test_split(
+            range(len(self.data['objects'])), 
+            test_size=test_size, 
+            random_state=42
+        )
+        if split == 'train':
+            indices = train_indices
+        elif split == 'test':
+            indices = test_indices
+        else:
+            raise ValueError(f"Invalid split argument: '{split}', expected 'train' or 'test'.")
+
+        colours = [(166, 0, 0), (0, 166, 0), (0, 0, 166)] # red, green, blue
+        self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects'][indices]]
+        self.bboxes = [[BoundingBox(bbox, pos_type="lurb", color = colours[i]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
+
         for objects, bboxes in zip(self.objects, self.bboxes):
             for obj, bbox in zip(objects, bboxes):
                 obj.equip_bbox(bbox)
         
         if "images" in self.data.keys():
             print("Loading images from data")
-            self.images = [Image.fromarray(image) for image in self.data['images']]
+            self.images = [Image.fromarray(image) for image in self.data['images'][indices]]
         elif image_path is not None:
             print("Loading images from image_path")
             self.image_data = np.load(image_path)
-            self.images = [Image.fromarray(image) for image in self.image_data['images']]
+            self.images = [Image.fromarray(image) for image in self.image_data['images'][indices]]
         else:
             print("Generating images from bboxes")
             self.images = [draw_bboxes(bboxes) for bboxes in self.bboxes]
 
-        self.relations = [self.formula_to_image(raw_relations, raw_objects) for raw_relations, raw_objects in zip(self.data['relations'], self.objects)]
+        self.relations = [self.formula_to_image(raw_relations, raw_objects) for raw_relations, raw_objects in zip(self.data['relations'][indices], self.objects)]
         self.annotated_images = [annotate(image, relations, objects) for image, relations, objects in zip(self.images, self.relations, self.objects)]
         self.prompts = [prompt(relations = relations) for relations in self.relations]
 
@@ -272,6 +308,16 @@ class RelationalDataset(Dataset):
         return self.num
     
     def __getitem__(self, idx):
+        """
+        Returns:
+            clean_image: Tensor of shape (3, resolution, resolution)
+            objects: Tensor of shape (num_objects, 4)
+            relations: Tensor of shape (num_relations, 9)
+            bboxes: Tensor of shape (num_objects, 4)
+            generated_prompt: str
+            annotated_image: Tensor of shape (3, resolution, resolution)
+            relations_ids: Tensor of shape (num_relations, 2)
+        """
         # print(f"start getitem {idx}")
         raw_image = self.images[idx]
         annotated_image = self.annotated_images[idx]
@@ -286,8 +332,10 @@ class RelationalDataset(Dataset):
         objects = torch.stack([object.tensorize() for object in self.objects[idx]])
         if len(self.relations[idx]) > 0:
             relations = torch.stack([relation.tensorize() for relation in self.relations[idx]])
+            relations_ids = torch.stack([relation.indices() for relation in self.relations[idx]])
         else:
             relations = torch.zeros((0, 7))
+            relations_ids = torch.zeros((0, 2))
         bboxes = torch.stack([bbox.tensorize() for bbox in self.bboxes[idx]])
         # print(f"in getitem, shapes are {clean_image.shape}, {objects.shape}, {relations.shape}, {bboxes.shape}")
 
@@ -297,13 +345,15 @@ class RelationalDataset(Dataset):
 
         annotated_image_tensor = pil_to_tensor(annotated_image)
         
-        return clean_image, objects, relations, bboxes, generated_prompt, raw_image, annotated_image_tensor
+        return clean_image, objects, relations, bboxes, generated_prompt, raw_image, annotated_image_tensor, relations_ids
     
 
 class RelationalDataset2O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/toy_2obj.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/combined_file.npz'
+
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
-        super().__init__(self.path, uncond_image_type, center_crop, pick_one_relation)
+        super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
 
 
 
@@ -311,5 +361,5 @@ class RelationalDataset1O(RelationalDataset):
     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
-        super().__init__(self.path, uncond_image_type, center_crop, pick_one_relation, image_path = self.image_path)
+        super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
     

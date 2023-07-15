@@ -6,4 +6,4 @@ Adapted from Jiayuan's code. Not factorized, has bugs in size normalization
 - Refactorized single bbox generation.
 - Expect to have no bugs. All generated boxes are square and the sizes match.
 ### cog_bbox5 - Two Bbox generation on CLEVR
-- TBD
+- models [Denoise, Bidenoise] -> Diffuser[GaussianDiffusion1D] -> trainer[Trainer1D] -> train.py

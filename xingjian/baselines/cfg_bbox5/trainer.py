@@ -74,10 +74,10 @@ class Trainer1D(object):
         self,
         diffusion_model: GaussianDiffusion1D,
         *,
-        dataset_type: str = 'CLEVR_1O',
+        dataset_type: str = 'CLEVR_2O',
         dataset: Dataset = None,
         dataloader: DataLoader = None,
-        train_batch_size = 64,
+        train_batch_size = 128,
         eval_batch_size = 16,
         gradient_accumulate_every = 1,
         train_lr = 1e-4,
@@ -85,7 +85,7 @@ class Trainer1D(object):
         ema_update_every = 10,
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
-        save_and_sample_every = 200,
+        save_and_sample_every = 100,
         num_samples = 25,
         data_workers = None,
         results_folder = './results',
@@ -95,6 +95,7 @@ class Trainer1D(object):
         metric = 'mse',
         cond_mask = False,
         wandb = False,
+        name = 'default'
     ):
         super().__init__()
 
@@ -105,6 +106,7 @@ class Trainer1D(object):
             mixed_precision = 'fp16' if fp16 else 'no'
         )
         self.wandb = wandb
+        self.name = name
 
         self.accelerator.native_amp = amp
         self.dataset_type = dataset_type
@@ -118,7 +120,7 @@ class Trainer1D(object):
         self.cond_mask = cond_mask
 
         # sampling and training hyperparameters
-        self.out_dim = self.model.out_dim
+        # self.out_dim = self.model.out_dim
 
         assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
         self.num_samples = num_samples
@@ -140,8 +142,11 @@ class Trainer1D(object):
         # dataset
         if dataset_type == 'CLEVR_1O':
             dl = dataloader
+        elif dataset_type == 'CLEVR_2O':
+            dl = dataloader
         elif dataset_type == 'simple':
             dl = DataLoader(dataset, batch_size = train_batch_size, shuffle = True, pin_memory = False, num_workers = self.data_workers)
+        
         else:
             print(f"attention! Dataset unorthodox!")
             raise NotImplementedError
@@ -215,7 +220,7 @@ class Trainer1D(object):
         if self.wandb:
             wandb.init(
                 project="diffusion_bbox",
-                name=f"1-box-CLEVR",
+                name=self.name,
                 save_code=True,
             )
 
@@ -241,17 +246,18 @@ class Trainer1D(object):
                         inp, label = inp.float().to(device), label.float().to(device)
                         # print(f"all data obtained: {inp.shape}, {label.shape}, {len(prompts)}, {len(images)}, {images[0].shape}")
                         mask = None
+                    elif self.dataset_type == 'CLEVR_2O':
+                        objects, relations, label, prompts, images, relations_ids = data
+                        inp = (objects, relations, relations_ids)
+                        mask = None
                     elif self.dataset_type == 'simple':
                         inp, label = data
-                        
-                        
                         mask = None
                         prompts = None
                         images = []
                         for lab in label:
                             images.append(BoundingBox(lab).draw(color = (255, 0, 0)))
                         # print("check labels: ", label)
-                        
                     else:
                         raise NotImplementedError
 
@@ -285,7 +291,7 @@ class Trainer1D(object):
                     if self.step != 0 and self.step % self.save_and_sample_every == 0:
                         self.ema.ema_model.eval()
                         print(f"!!!!!in eval, step: {self.step}")
-                        inp = inp[:self.eval_batch_size]
+                        inp = (inp[0][:self.eval_batch_size], inp[1][:self.eval_batch_size], inp[2][:self.eval_batch_size]) if self.dataset_type == 'CLEVR_2O' else inp[:self.eval_batch_size]
                         label = label[:self.eval_batch_size]
                         mask = mask[:self.eval_batch_size] if mask is not None else None
                         prompts = prompts[:self.eval_batch_size] if prompts is not None else None
@@ -316,12 +322,17 @@ class Trainer1D(object):
                             rows = []
                             bboxes = []
                             for i in range(all_samples.size(0)):
-                                this_inp = inp[i]
+                                obj_cond, rel_cond, rel_id_cond = inp
                                 this_out = all_samples[i]
-                                rows.append((this_inp.tolist(), this_out.tolist(), label[i].tolist()))
-                                bboxes.append(BoundingBox(this_out.tolist()))
+                                # this_out is actually a list of boxes!
+                                bbox = []
+                                for e in this_out:
+                                    bbox.append(BoundingBox(e.tolist()))
+                                bboxes.append(bbox)
+                                #obj cond to list
+
+                                rows.append(((obj_cond[i].tolist(), rel_cond[i].tolist(), rel_id_cond[i].tolist()), this_out.tolist(), label[i].tolist()))
                             print(tabulate(rows))
-                            # print([str(bbox) for bbox in bboxes])
 
                             
                             if self.wandb:
@@ -329,7 +340,9 @@ class Trainer1D(object):
                                     # if tensor, then trans to Image
                                     if isinstance(image, torch.Tensor):
                                         image = tensor_to_pil(image)
-                                    image = bboxes[i].draw(image, color=(0, 0, 255))
+                                    colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255)] # red, green, blue
+                                    for j, bbox in enumerate(bboxes[i]):
+                                        image = bbox.draw(image, color=colours[j])
                                     images[i] = image
                                     if self.dataset_type == 'CLEVR_1O':
                                         size = "small" if inp[i][3] == 0 else "large"

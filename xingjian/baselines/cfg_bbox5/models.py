@@ -58,6 +58,12 @@ class Denoise(nn.Module):
         self.out_dim = out_dim
 
     def forward(self, cond, out, t):
+        """
+        Args
+            cond: (batch, inp_dim)
+            out: (batch, out_dim)
+            t: (batch, 1)
+        """
         t_emb = self.time_mlp(t)
 
         fc2_gain, fc2_bias = torch.chunk(self.t_map_fc2(t_emb), 2, dim=-1)
@@ -71,6 +77,41 @@ class Denoise(nn.Module):
         output = self.fc4(h)
 
         return output
+
+class BiDenoise(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.obj_denoise = Denoise(4, 4)
+        self.rel_denoise = Denoise(9, 8)
+        self.out_dim = 4
+    
+    def forward(self, conditions, positions, t):
+        """
+        obj_cond: (batch, obj_num, 4)
+        """
+        obj_cond, rel_cond, rel_ids = conditions
+        # brute force
+        output_batch = torch.zeros_like(positions)
+        for i in range(obj_cond.shape[0]): # batch
+            obj_cond_datum = obj_cond[i]
+            positions_datum = positions[i]
+            t_datum = torch.stack([t[i] for _ in range(obj_cond_datum.shape[0])])
+
+            obj_out = self.obj_denoise(obj_cond_datum, positions_datum, t_datum)
+            output_batch[i] += obj_out
+
+
+            rel_cond_datum = rel_cond[i]
+            positions_datum = torch.stack([torch.cat([positions[i, a], positions[i, b]], dim=-1) for (a, b) in rel_ids[i]])
+            t_datum = torch.stack([t[i] for _ in range(rel_cond_datum.shape[0])])
+            rel_out = self.rel_denoise(rel_cond_datum, positions_datum, t_datum)
+
+            for (j, rel_out_e) in enumerate(rel_out):
+                (a, b) = rel_ids[i][j]
+                output_batch[i, a] += rel_out_e[:4]
+                output_batch[i, b] += rel_out_e[4:]
+                
+        return output_batch
 
 
 class DiffusionWrapper(nn.Module):
