@@ -237,7 +237,9 @@ class RelationalDataset(Dataset):
                     idx = np.random.choice(np.nonzero(raw_relations[i][j])[0]) if np.sum(raw_relations[i][j]) > 0 else 6
                     relations.append(Relation(idx, raw_objects[i], raw_objects[j], [i, j]))
                 else:
-                    raise NotImplementedError
+                    for (k, rel) in enumerate(raw_relations[i][j]):
+                        if raw_relations[i][j][k] > 0:
+                            relations.append(Relation(k, raw_objects[i], raw_objects[j], [i, j]))
         return relations
                 
     def __init__(
@@ -348,18 +350,18 @@ class RelationalDataset(Dataset):
         return clean_image, objects, relations, bboxes, generated_prompt, raw_image, annotated_image_tensor, relations_ids
     
 
-class RelationalDataset2O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/combined_file.npz'
+# class RelationalDataset2O(RelationalDataset):
+#     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz'
+#     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/combined_file.npz'
 
-    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
-        super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
+#     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
+#         super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
 
 
 
-class RelationalDataset1O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
-    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
-        super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
+# class RelationalDataset1O(RelationalDataset):
+#     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
+#     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
+#     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=True):
+#         super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
     
