@@ -69,6 +69,8 @@ class Denoise(nn.Module):
         fc2_gain, fc2_bias = torch.chunk(self.t_map_fc2(t_emb), 2, dim=-1)
         fc3_gain, fc3_bias = torch.chunk(self.t_map_fc3(t_emb), 2, dim=-1)
 
+        # output shapes of cond and out
+        # print(f"cond shape: {cond.shape}, out shape: {out.shape}")
         x = torch.cat((cond, out), dim=-1)
         h = swish(self.fc1(x))
         h = swish(self.fc2(h) * (fc2_gain + 1) + fc2_bias)
@@ -94,10 +96,12 @@ class BiDenoise(nn.Module):
         output_batch = torch.zeros_like(positions)
 
         batch_size = len(obj_cond)
+        # print("before for loop")
         for i in range(batch_size): # batch
             obj_cond_datum = obj_cond[i]
             positions_datum = positions[i]
             t_datum = torch.stack([t[i] for _ in range(obj_cond_datum.shape[0])])
+
 
             obj_out = self.obj_denoise(obj_cond_datum, positions_datum, t_datum)
             output_batch[i] += obj_out

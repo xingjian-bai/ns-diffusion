@@ -51,8 +51,7 @@ class GaussianDiffusion1D(nn.Module):
     def __init__(
         self,
         model,
-        *,
-        seq_length,
+        seq_length = 32,
         obj_num = 2,
         timesteps = 1000,
         sampling_timesteps = None,

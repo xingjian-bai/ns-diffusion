@@ -9,6 +9,7 @@ from torchvision.utils import make_grid, save_image
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+import math
 
 from utils import *
 
@@ -101,6 +102,11 @@ class Object:
         self.material_idx = material_idx
         self.shape_idx = shape_idx
         self.size_idx = size_idx
+
+        assert self.color_idx < len(Object.colors), f"color_idx should be less than {len(Object.colors)}, but got {self.color_idx}"
+        assert self.material_idx < len(Object.materials), f"material_idx should be less than {len(Object.materials)}, but got {self.material_idx}"
+        assert self.shape_idx < len(Object.shapes), f"shape_idx should be less than {len(Object.shapes)}, but got {self.shape_idx}"
+        assert self.size_idx < len(Object.sizes), f"size_idx should be less than {len(Object.sizes)}, but got {self.size_idx}"
     
     def tensorize(self):
         ret = torch.tensor([self.color_idx, self.material_idx, self.shape_idx, self.size_idx])
@@ -113,6 +119,7 @@ class Object:
     
     def __str__(self, mode="normal") -> str:
         if mode == "normal":
+            # print(f"color_idx = {self.color_idx}, material_idx = {self.material_idx}, shape_idx = {self.shape_idx}, size_idx = {self.size_idx}")
             return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.materials[self.material_idx]} {Object.shapes[self.shape_idx]}"
         else:
             raise NotImplementedError
@@ -136,13 +143,14 @@ class Relation:
                 (255, 0, 255),   # Magenta, above
                 (0, 0, 0),       # Black, none
     ]
-    def __init__(self, relation_idx, obj1, obj2, obj_indices):
+    def __init__(self, relation_idx, obj1, obj2, obj_indices, shift = 0):
         self.relation_idx = relation_idx
         self.relation = Relation.relations[relation_idx]
         self.obj1 = obj1
         self.obj2 = obj2
         self.obj_indices = obj_indices
         self.colour = Relation.colours[relation_idx]
+        self.shift = shift
     
     def tensorize(self):
         ret = torch.tensor([*self.obj1.tensorize(), *self.obj2.tensorize(), self.relation_idx])
@@ -162,8 +170,8 @@ class Relation:
     
     def draw_relation(self, image, thickness=1):
         # calculate the center of the bounding boxes
-        c1x, c1y = self.obj1.bbox.pos[0], self.obj1.bbox.pos[1]
-        c2x, c2y = self.obj2.bbox.pos[0], self.obj2.bbox.pos[1]
+        c1x, c1y = self.obj1.bbox.pos[0] + self.shift, self.obj1.bbox.pos[1] + self.shift
+        c2x, c2y = self.obj2.bbox.pos[0] + self.shift, self.obj2.bbox.pos[1] + self.shift
 
         draw = ImageDraw.Draw(image)
         draw.line((c1x, c1y, c2x, c2y), fill=self.colour, width=thickness)
@@ -233,13 +241,13 @@ class RelationalDataset(Dataset):
             for j in range (len(raw_relations[i])):
                 if i >= j:
                     continue 
+                ij_rels = np.nonzero(raw_relations[i][j])[0]
                 if self.pick_one_relation:
-                    idx = np.random.choice(np.nonzero(raw_relations[i][j])[0]) if np.sum(raw_relations[i][j]) > 0 else 6
+                    idx = np.random.choice(ij_rels) if len(ij_rels) > 0 else 6
                     relations.append(Relation(idx, raw_objects[i], raw_objects[j], [i, j]))
                 else:
-                    for (k, rel) in enumerate(raw_relations[i][j]):
-                        if raw_relations[i][j][k] > 0:
-                            relations.append(Relation(k, raw_objects[i], raw_objects[j], [i, j]))
+                    for (id, k) in enumerate(ij_rels):
+                        relations.append(Relation(k, raw_objects[i], raw_objects[j], [i, j], shift = (id - len(ij_rels) / 2) * 5))
         return relations
                 
     def __init__(
@@ -249,8 +257,9 @@ class RelationalDataset(Dataset):
         test_size = 0.2,
         uncond_image_type="original",
         center_crop=True,
-        pick_one_relation=True,
-        image_path = None
+        pick_one_relation=False,
+        image_path = None,
+        num_upperbound = None,
     ):
         self.center_crop = center_crop
         self.data = np.load(data_path)
@@ -271,7 +280,12 @@ class RelationalDataset(Dataset):
         else:
             raise ValueError(f"Invalid split argument: '{split}', expected 'train' or 'test'.")
 
-        colours = [(166, 0, 0), (0, 166, 0), (0, 0, 166)] # red, green, blue
+        if num_upperbound is not None:
+            # random shuffle and take the first num_upperbound
+            np.random.shuffle(indices)
+            indices = indices[:num_upperbound]
+        
+        colours = [(166, 0, 0), (0, 166, 0), (0, 0, 166), (166, 166, 0), (166, 0, 166), (0, 166, 166), (166, 166, 166)]
         self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects'][indices]]
         self.bboxes = [[BoundingBox(bbox, pos_type="lurb", color = colours[i]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
 
@@ -290,6 +304,7 @@ class RelationalDataset(Dataset):
             print("Generating images from bboxes")
             self.images = [draw_bboxes(bboxes) for bboxes in self.bboxes]
 
+        self.all_raw_relations = self.data['relations'][indices]
         self.relations = [self.formula_to_image(raw_relations, raw_objects) for raw_relations, raw_objects in zip(self.data['relations'][indices], self.objects)]
         self.annotated_images = [annotate(image, relations, objects) for image, relations, objects in zip(self.images, self.relations, self.objects)]
         self.prompts = [prompt(relations = relations) for relations in self.relations]
@@ -346,8 +361,9 @@ class RelationalDataset(Dataset):
         # put everythin in a dict
 
         annotated_image_tensor = pil_to_tensor(annotated_image)
+        raw_image_tensor = pil_to_tensor(raw_image)
         
-        return clean_image, objects, relations, bboxes, generated_prompt, raw_image, annotated_image_tensor, relations_ids
+        return clean_image, objects, relations, bboxes, generated_prompt, raw_image, raw_image_tensor, relations_ids
     
 
 # class RelationalDataset2O(RelationalDataset):

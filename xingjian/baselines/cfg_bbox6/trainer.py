@@ -95,7 +95,7 @@ class Trainer1D(object):
         metric = 'mse',
         cond_mask = False,
         wandb = False,
-        name = 'default'
+        name = 'default',
     ):
         super().__init__()
 
@@ -140,13 +140,10 @@ class Trainer1D(object):
             self.data_workers = cpu_count()
 
         # dataset
-        if dataset_type == 'CLEVR_1O':
-            dl = dataloader
-        elif dataset_type == 'CLEVR_2O':
+        if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O':
             dl = dataloader
         elif dataset_type == 'simple':
             dl = DataLoader(dataset, batch_size = train_batch_size, shuffle = True, pin_memory = False, num_workers = self.data_workers)
-        
         else:
             print(f"attention! Dataset unorthodox!")
             raise NotImplementedError
@@ -226,9 +223,10 @@ class Trainer1D(object):
 
         end_time = time.time()
         with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
+            
+            tqdm_update_freq = 100 
 
             while self.step < self.train_num_steps:
-
                 total_loss = 0.
 
                 end_tiem = time.time()
@@ -280,13 +278,16 @@ class Trainer1D(object):
                 accelerator.wait_for_everyone()
 
                 nn_time = time.time() - end_time; end_time = time.time()
-                pbar.set_description(f'loss: {total_loss:.4f} loss_denoise: {loss_denoise:.4f} loss_energy: {loss_energy:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+                
+                if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
+                    pbar.set_description(f'loss: {total_loss:.4f} loss_denoise: {loss_denoise:.4f} loss_energy: {loss_energy:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+                    pbar.update(tqdm_update_freq)
                 if self.wandb:
                     wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
-
                 self.step += 1
+
                 if accelerator.is_main_process:
-                    self.ema.update()
+                    self.ema.update ()
 
                     if self.step != 0 and self.step % self.save_and_sample_every == 0:
                         self.ema.ema_model.eval()
@@ -353,12 +354,81 @@ class Trainer1D(object):
 
                         self.save(milestone)
 
-                pbar.update(1)
+                
 
         accelerator.print('training complete')
 
         if self.wandb:
             wandb.finish()
+
+    def eval(self, single_image_eval, data_loader, show_off_mode = False, repeat = 8, wandb_drawer = None):
+        accelerator = self.accelerator
+        device = accelerator.device
+
+        scores = []
+            
+        #make dataset into dataloader
+        for (data_id, data) in enumerate(data_loader):
+            objects, relations, relations_ids, labels, images = data
+            mask = None
+            inp = (objects, relations, relations_ids)
+
+            objects = [obj.to(device) for obj in objects]
+            relations = [relation.to(device) for relation in relations]
+            labels = [l.to(device) for l in labels]
+            images = [image.to(device) for image in images]
+            relations_ids = [relation_id.to(device) for relation_id in relations_ids]
+            
+
+            if show_off_mode:
+                objects = [item for item in objects for _ in range(repeat)][:self.eval_batch_size]
+                relations = [item for item in relations for _ in range(repeat)][:self.eval_batch_size]
+                relations_ids = [item for item in relations_ids for _ in range(repeat)][:self.eval_batch_size]
+                labels = [item for item in labels for _ in range(repeat)][:self.eval_batch_size]
+                images = [item for item in images for _ in range(repeat)][:self.eval_batch_size]
+
+            inp = (objects, relations, relations_ids)
+            print("dealing with data_id: ", data_id)
+            self.ema.ema_model.eval()
+            with torch.no_grad():
+                all_samples_list = list(map(lambda n: self.ema.ema_model.sample(
+                    inp, labels, mask,
+                    batch_size=self.eval_batch_size), range(1)))
+
+            all_samples = torch.cat(all_samples_list, dim = 0)
+
+            # print("shape of all samples: ", all_samples.shape)
+            # print("len of obj_cond: ", len(obj_cond))
+            # print("len of rel_cond: ", len(rel_cond))
+            # print("len of rel_id_cond: ", len(rel_id_cond))
+
+            for i in range(len(relations)):
+                score = single_image_eval(all_samples[i], relations[i], relations_ids[i])
+                scores.append(score)
+            
+            if show_off_mode:
+                bboxes = [[BoundingBox(e.tolist()) for e in this_out] for this_out in all_samples]
+                for i, image in enumerate(images):
+                    if isinstance(image, torch.Tensor):
+                        image = tensor_to_pil(image)
+                    colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)] # red, green, blue, yellow, cyan, magenta
+                    for j, bbox in enumerate(bboxes[i]):
+                        image = bbox.draw(image, color=colours[j])
+                    images[i] = image
+                if wandb_drawer is not None:
+                    print("wandb log images")
+                    wandb_drawer.log({"images": [wandb.Image(image) for image in images]}, step = data_id)
+                    # wandb.log({"images": [wandb.Image(image) for image in images]}, step = data_id)
+                    break
+        if not show_off_mode:
+            avg_score = sum(scores) / len(scores)
+            print("acc: ", avg_score)
+            if wandb_drawer is not None:
+                wandb.log({"acc": avg_score}, step = self.step)
+            return avg_score
+                
+        
+
 
 
 

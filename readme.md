@@ -15,3 +15,12 @@ Adapted from Jiayuan's code. Not factorized, has bugs in size normalization
 - change the dataset: input all relations, instead of one-per-pair
 - Will make cfg_bbox*, *<6, deprecated.
 - allow batch_size > 1, but use for-loops.
+
+### relation
+### [inside pipeline] evaluation pipeline
+- choose from 1O, 2O, 3O, 4O
+- load given model
+- combine single image evaluation
+- eval on multi-images, use 
+
+
