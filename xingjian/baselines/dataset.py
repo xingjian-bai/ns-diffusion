@@ -204,31 +204,28 @@ def prompt(objects = [], relations = []):
     return ", AND ".join([str(rel) for rel in relations if rel.relation_idx != 6]) + ", AND ".join([str(obj) for obj in objects])
 
 def gen_rand_object():
+    #in list form
     color_idx = np.random.randint(0, len(Object.colors))
     material_idx = np.random.randint(0, len(Object.materials))
     shape_idx = np.random.randint(0, len(Object.shapes))
     size_idx = np.random.randint(0, len(Object.sizes))
-    return Object(color_idx, material_idx, shape_idx, size_idx)
+    return [color_idx, material_idx, shape_idx, size_idx]
 
-def gen_rand_relation(obj1, obj2, id1, id2):
-    relation_idx = np.random.randint(0, len(Relation.relations))
-    return Relation(relation_idx, obj1, obj2, [id1, id2])
-
-def gen_rand_scene(num_objects, num_relations):
-    objects = []
-    relations = []
-    for i in range(num_objects):
-        objects.append(gen_rand_object())
-    for i in range(num_relations):
-        obj1_idx = i % len(objects)
-        obj2_idx = np.random.randint(0, len(objects))
-        while obj1_idx == obj2_idx:
-            obj2_idx = np.random.randint(0, len(objects))
-        relations.append(gen_rand_relation(objects[obj1_idx], objects[obj2_idx]))
-    return objects, relations
-def gen_prompt(num_objects, num_relations):
-    objects, relations = gen_rand_scene(num_objects, num_relations)
-    return prompt(relations = relations)
+# def gen_rand_scene(num_objects, num_relations):
+#     objects = []
+#     relations = []
+#     for i in range(num_objects):
+#         objects.append(gen_rand_object())
+#     for i in range(num_relations):
+#         obj1_idx = i % len(objects)
+#         obj2_idx = np.random.randint(0, len(objects))
+#         while obj1_idx == obj2_idx:
+#             obj2_idx = np.random.randint(0, len(objects))
+#         relations.append(gen_rand_relation(objects[obj1_idx], objects[obj2_idx]))
+#     return objects, relations
+# def gen_prompt(num_objects, num_relations):
+#     objects, relations = gen_rand_scene(num_objects, num_relations)
+#     return prompt(relations = relations)
 
 
 class RelationalDataset(Dataset):
@@ -239,7 +236,7 @@ class RelationalDataset(Dataset):
         relations = []
         for i in range (len(raw_relations)):
             for j in range (len(raw_relations[i])):
-                if i >= j:
+                if i == j:
                     continue 
                 ij_rels = np.nonzero(raw_relations[i][j])[0]
                 if self.pick_one_relation:
@@ -260,13 +257,43 @@ class RelationalDataset(Dataset):
         pick_one_relation=False,
         image_path = None,
         num_upperbound = None,
+        generated_object_num = 3,
+        generated_data_num = 1000,
     ):
         self.center_crop = center_crop
-        self.data = np.load(data_path)
         self.pick_one_relation = pick_one_relation
         self.uncod_image_type = uncond_image_type
 
-        # print(self.data.keys())
+        if data_path != "nothing":  
+            self.data = np.load(data_path)
+        else:
+            self.data = {}
+            self.data['objects'] = [] #shape (num_data, num_objects, 4)
+            self.data['bboxes'] = [] #shape (num_data, num_objects, 4)
+            self.data['relations'] = [] #shape (num_data, num_objects, num_objects, 7)
+
+
+            for i in range(generated_data_num):
+                objects = np.array([gen_rand_object() for _ in range(generated_object_num)])
+                relations = np.zeros((generated_object_num, generated_object_num, 7))
+                bboxes = np.random.randint(0, 128, (generated_object_num, 4))
+                for a in range(generated_object_num):
+                    for b in range(generated_object_num):
+                        if a >= b:
+                            continue
+                        #random number of 0 or 1
+                        relations[a][b][0] = relations[b][a][1] = np.random.randint(0, 2)
+                        relations[a][b][1] = relations[b][a][0] = not relations[a][b][0]
+                        relations[a][b][2] = relations[b][a][3] = np.random.randint(0, 2)
+                        relations[a][b][3] = relations[b][a][2] = not relations[a][b][2]
+                self.data['objects'].append(objects)
+                self.data['relations'].append(relations)
+                self.data['bboxes'].append(bboxes)
+                print("Generating data: ", objects, relations)
+            
+            self.data['objects'] = np.array(self.data['objects'])
+            self.data['relations'] = np.array(self.data['relations'])
+            self.data['bboxes'] = np.array(self.data['bboxes'])
 
         train_indices, test_indices = train_test_split(
             range(len(self.data['objects'])), 
@@ -280,14 +307,14 @@ class RelationalDataset(Dataset):
         else:
             raise ValueError(f"Invalid split argument: '{split}', expected 'train' or 'test'.")
 
-        if num_upperbound is not None:
+        if num_upperbound is not None and num_upperbound < len(indices):
             # random shuffle and take the first num_upperbound
-            np.random.shuffle(indices)
+            # np.random.shuffle(indices)
             indices = indices[:num_upperbound]
         
         colours = [(166, 0, 0), (0, 166, 0), (0, 0, 166), (166, 166, 0), (166, 0, 166), (0, 166, 166), (166, 166, 166)]
         self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects'][indices]]
-        self.bboxes = [[BoundingBox(bbox, pos_type="lurb", color = colours[i]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
+        self.bboxes = [[BoundingBox(bbox, pos_type="lurb", color = colours[i % len(colours)]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
 
         for objects, bboxes in zip(self.objects, self.bboxes):
             for obj, bbox in zip(objects, bboxes):
@@ -302,7 +329,7 @@ class RelationalDataset(Dataset):
             self.images = [Image.fromarray(image) for image in self.image_data['images'][indices]]
         else:
             print("Generating images from bboxes")
-            self.images = [draw_bboxes(bboxes) for bboxes in self.bboxes]
+            self.images = [Image.new("RGB", (128, 128), (255, 255, 255)) for _ in range(len(indices))]
 
         self.all_raw_relations = self.data['relations'][indices]
         self.relations = [self.formula_to_image(raw_relations, raw_objects) for raw_relations, raw_objects in zip(self.data['relations'][indices], self.objects)]
