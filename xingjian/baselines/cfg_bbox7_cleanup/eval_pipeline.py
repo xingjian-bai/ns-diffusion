@@ -65,13 +65,36 @@ class RelationalDataset4O(RelationalDataset):
                          image_path=self.image_path, 
                          split = "test", num_upperbound = args.num_upperbound)
 
+class RelationalDataset5O(RelationalDataset):
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old_imgs/1.npz'
+    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
+        super().__init__(self.path, 
+                         uncond_image_type=uncond_image_type, 
+                         center_crop=center_crop, 
+                         pick_one_relation=pick_one_relation, 
+                         image_path=self.image_path, 
+                         split = "test", num_upperbound = args.num_upperbound)
+
+class RelationalDataset8O(RelationalDataset):
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old_imgs/1.npz'
+    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
+        super().__init__(self.path, 
+                         uncond_image_type=uncond_image_type, 
+                         center_crop=center_crop, 
+                         pick_one_relation=pick_one_relation, 
+                         image_path=self.image_path, 
+                         split = "test", num_upperbound = args.num_upperbound)
+
+
 class RelationalDatasetxO(RelationalDataset):
-    def __init__(self, x, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
+    def __init__(self, x, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None, upperbound = 1000):
         super().__init__(data_path = "nothing",
                          uncond_image_type=uncond_image_type, 
                          center_crop=center_crop, 
                          pick_one_relation=pick_one_relation, 
-                         split = "train", num_upperbound = args.num_upperbound,
+                         split = "train", num_upperbound = args.num_upperbound if args is not None else upperbound,
                          generated_object_num = x, generated_data_num = 1000)
 
 class EvalAdaptedDataset(Dataset):
@@ -175,6 +198,12 @@ def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = 
                 colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)] # red, green, blue, yellow, cyan, magenta
                 for j, bbox in enumerate(bboxes[i]):
                     image = bbox.draw(image, color=colours[j % len(colours)])
+                
+                if args.with_scene_graph:
+                    from dataset import draw_scene_graph
+                    scene_graph = draw_scene_graph(objects[i], relations[i], relations_ids[i])
+                    image = combine_images(image, scene_graph)
+
                 images[i] = image
             if wandb_drawer is not None:
                 wandb_drawer.log({"images": [wandb.Image(image) for image in images]}, step = dataset_step)
@@ -194,7 +223,7 @@ def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = 
             wandb_drawer.log({"acc": avg_score}, step = dataset_step)
         return avg_score
 
-def evaluate(dataset_type, metric, threshold = 0.5, epoch = 700, wandb_drawer = None, args = None):
+def evaluate(dataset_type, metric, threshold = 0.5, epoch = 90, wandb_drawer = None, args = None):
     print(f"evaluating model (epoch={epoch}) with data={dataset_type}, metric={metric}")
     if metric == 'relation_classifier':
         sys.path.append('../bbox_classifier/')
@@ -222,22 +251,19 @@ def evaluate(dataset_type, metric, threshold = 0.5, epoch = 700, wandb_drawer = 
     else:
         raise NotImplementedError
     
-    if dataset_type == 'CLEVR_2O':
+    if dataset_type == 2 and args.pure_synthetic == False:
         dataset = RelationalDataset2O(args = args)
-        obj_num = 2
-    elif dataset_type == 'CLEVR_1O':
-        dataset = RelationalDataset1O(args = args)
-        obj_num = 1
-    elif dataset_type == 'CLEVR_3O':
+    elif dataset_type == 3 and args.pure_synthetic == False:
         dataset = RelationalDataset3O(args = args)
-        obj_num = 3
-    elif dataset_type == 'CLEVR_4O':
+    elif dataset_type == 4 and args.pure_synthetic == False:
         dataset = RelationalDataset4O(args = args)
-        obj_num = 4
+    elif dataset_type == 5 and args.pure_synthetic == False:
+        dataset = RelationalDataset5O(args = args)
+    elif dataset_type == 8 and args.pure_synthetic == False:
+        dataset = RelationalDataset8O(args = args)
     else:
         # print("self generating dataset...")
-        obj_num = int(dataset_type[-2])
-        dataset = RelationalDatasetxO(obj_num, args = args)
+        dataset = RelationalDatasetxO(dataset_type, args = args)
     
     from models import BiDenoise
 
@@ -251,19 +277,19 @@ def evaluate(dataset_type, metric, threshold = 0.5, epoch = 700, wandb_drawer = 
     else:
         raise NotImplementedError
 
-    print(f"evaluating {args.model_name} on {dataset_type}")
+    print(f"evaluating {args.model_name} on {dataset_type} objects")
 
     diffuser = GaussianDiffusion1D(model,seq_length = 32,
             beta_schedule = 'cosine',
             objective = 'pred_noise', 
             timesteps = 100,
             sampling_timesteps = 100,
-            obj_num = obj_num,
+            obj_num = dataset_type,
         ).cuda()
     trainer = Trainer1D(
             diffuser,
-            dataset_type = 'CLEVR_2O',
-            wandb = False,
+            dataset_type = args.train_dataset_type,
+            wandb_drawer = False,
             eval_batch_size = args.batch_size,
             name = f"multi_rel",
         )
@@ -276,40 +302,39 @@ def evaluate(dataset_type, metric, threshold = 0.5, epoch = 700, wandb_drawer = 
     eval_dataset = EvalAdaptedDataset(dataset)
     eval_dataloader = DataLoader(eval_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_adapted)
     
-    eval(trainer, single_image_eval, eval_dataloader, obj_num, show_off_mode = True, repeat = 8, wandb_drawer = wandb_drawer, args = args)
-    eval(trainer, single_image_eval, eval_dataloader, obj_num, show_off_mode = False, wandb_drawer = wandb_drawer, args = args)
+    eval(trainer, single_image_eval, eval_dataloader, dataset_type, show_off_mode = True, repeat = 8, wandb_drawer = wandb_drawer, args = args)
+    eval(trainer, single_image_eval, eval_dataloader, dataset_type, show_off_mode = False, wandb_drawer = wandb_drawer, args = args)
 
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='eval pipeline')
+    parser.add_argument('--epoch', default=90, type=int)
     parser.add_argument('--batch_size', default=32, type=int, help='size of batch of input to use')
     parser.add_argument('--num_upperbound', default=200, type=int)
     parser.add_argument('--metric', type=str, default='relation_classifier', help='metric to use')
     parser.add_argument('--model_name', type=str, default='both', help='name of the model tested')
     parser.add_argument('--wandb', default=False, action='store_true', help='use wandb')
     parser.add_argument('--no_above_below', default=False, action='store_true', help='use wandb')
+    parser.add_argument('--pure_synthetic', default=False, action='store_true')
+    parser.add_argument('--train_dataset_type', type=str, default='CLEVR_2O')
+    parser.add_argument('--eval_from', default = 2, type = int)
+    parser.add_argument('--eval_to', default = 9, type = int)
+    parser.add_argument('--with_scene_graph', default=False, action='store_true')
     
     args, unknown = parser.parse_known_args()
 
     if args.wandb:
         wandb_drawer = wandb.init(
             project="diffusion_bbox_eval",
-            name=f"{args.model_name}-{args.metric}-{args.num_upperbound}",
+            name=f"{args.model_name}-{args.metric}-{args.num_upperbound}" + ("syn" if args.pure_synthetic else "") + f"-{args.train_dataset_type}" + f"-{args.epoch}",
             save_code=True,
         )
     else:
         wandb_drawer = None
 
-    
-    
-    evaluate("CLEVR_2O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_3O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_4O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_5O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_6O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_7O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_8O", args.metric, wandb_drawer = wandb_drawer, args = args)
-    evaluate("CLEVR_9O", args.metric, wandb_drawer = wandb_drawer, args = args)
+    for obj_num in range(args.eval_from, args.eval_to):
+        evaluate(obj_num, args.metric, wandb_drawer = wandb_drawer, args = args)
+
     if wandb_drawer is not None:
         wandb_drawer.finish()

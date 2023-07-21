@@ -17,10 +17,25 @@ def show_image(image):
     plt.show()
 
 # concat horizontally two Image into one
+# def combine_images(im1, im2):
+#     dst = Image.new('RGB', (im1.width + im2.width, im1.height))
+#     dst.paste(im1, (0, 0))
+#     dst.paste(im2, (im1.width, 0))
+#     return dst
 def combine_images(im1, im2):
-    dst = Image.new('RGB', (im1.width + im2.width, im1.height))
+    # Resize im2 to match the height of im1, maintaining aspect ratio
+    aspect_ratio = im2.width / im2.height
+    new_height = im1.height
+    new_width = int(aspect_ratio * new_height)
+    im2_resized = im2.resize((new_width, new_height))
+
+    # Create a new image that fits both the images
+    dst = Image.new('RGB', (im1.width + im2_resized.width, im1.height))
+
+    # Paste the images onto the new image
     dst.paste(im1, (0, 0))
-    dst.paste(im2, (im1.width, 0))
+    dst.paste(im2_resized, (im1.width, 0))
+
     return dst
 
 def tensor_to_pil(image_tensor: torch.Tensor) -> Image:

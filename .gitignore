@@ -5,6 +5,7 @@ blender*
 *.sh
 *.npz
 *.pth
+images
 
 /xingjian/Compositional*
 /xingjian/diffusers

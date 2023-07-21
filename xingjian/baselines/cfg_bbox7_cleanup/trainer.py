@@ -75,6 +75,7 @@ class Trainer1D(object):
         diffusion_model: GaussianDiffusion1D,
         *,
         dataset_type: str = 'CLEVR_2O',
+        real_dataset_name = None,
         dataset: Dataset = None,
         dataloader: DataLoader = None,
         train_batch_size = 128,
@@ -94,10 +95,15 @@ class Trainer1D(object):
         split_batches = True,
         metric = 'mse',
         cond_mask = False,
-        wandb = False,
+        wandb_drawer = None,
         name = 'default',
+        starting_step = 0,
     ):
         super().__init__()
+        if real_dataset_name is None:
+            real_dataset_name = dataset_type
+        self.real_dataset_name = real_dataset_name
+
 
         # accelerator
 
@@ -105,7 +111,7 @@ class Trainer1D(object):
             split_batches = split_batches,
             mixed_precision = 'fp16' if fp16 else 'no'
         )
-        self.wandb = wandb
+        self.wandb = wandb_drawer
         self.name = name
 
         self.accelerator.native_amp = amp
@@ -142,14 +148,17 @@ class Trainer1D(object):
         # dataset
         if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O':
             dl = dataloader
+            dl = self.accelerator.prepare(dl)
+            self.dl = cycle(dl)
         elif dataset_type == 'simple':
             dl = DataLoader(dataset, batch_size = train_batch_size, shuffle = True, pin_memory = False, num_workers = self.data_workers)
+            dl = self.accelerator.prepare(dl)
+            self.dl = cycle(dl)
         else:
-            print(f"attention! Dataset unorthodox!")
-            raise NotImplementedError
+            print(f"attention! Dataset unorthodox! cannot performan training then")
+            # raise NotImplementedError
 
-        dl = self.accelerator.prepare(dl)
-        self.dl = cycle(dl)
+        
 
         # optimizer
 
@@ -166,7 +175,7 @@ class Trainer1D(object):
 
         # step counter state
 
-        self.step = 0
+        self.step = starting_step
 
         # prepare model, dataloader, optimizer with accelerator
 
@@ -177,7 +186,7 @@ class Trainer1D(object):
         return self.accelerator.device
 
     def get_train_name(self):
-        return f'{self.name}--{self.model.model.BiDenoise_name()}--{self.dataset_type}'
+        return f'{self.name}--{self.model.model.BiDenoise_name()}--{self.real_dataset_name}'
 
 
     def save(self, milestone):
@@ -218,22 +227,16 @@ class Trainer1D(object):
         accelerator = self.accelerator
         device = accelerator.device
 
-        if self.wandb:
-            wandb.init(
-                project="diffusion_bbox",
-                name=self.get_train_name(),
-                save_code=True,
-            )
-
         end_time = time.time()
-        with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
+
+        step_limit = self.train_num_steps + self.step
+        with tqdm(initial = self.step, total = step_limit, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
             
             tqdm_update_freq = 100 
 
-            while self.step < self.train_num_steps:
+            while self.step < step_limit:
                 total_loss = 0.
 
-                end_tiem = time.time()
                 for _ in range(self.gradient_accumulate_every):
                     data = next(self.dl)
 
@@ -281,7 +284,7 @@ class Trainer1D(object):
                     pbar.set_description(f'loss: {total_loss:.4f} loss_denoise: {loss_denoise:.4f} loss_energy: {loss_energy:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
                     pbar.update(tqdm_update_freq)
                 if self.wandb:
-                    wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
+                    self.wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
                 self.step += 1
 
                 if accelerator.is_main_process:
@@ -303,11 +306,15 @@ class Trainer1D(object):
                                 batch_size=self.eval_batch_size), range(1)))
 
                         all_samples = torch.cat(all_samples_list, dim = 0)
-                        mse_error = (all_samples - label).pow(2).mean()
+                        # mse_error = (all_samples - label).pow(2).mean()
+                        if all_samples.shape[0] == self.eval_batch_size:
+                            print(f"all_samples has the expected size")
+                        else:
+                            print(f"all_samples has wrong size!", all_samples.shape[0], self.eval_batch_size, label.size(0))
 
                         if self.metric == 'visualize':
                             rows, bboxes = [], []
-                            for i in range(all_samples.size(0)):
+                            for i in range(label.size(0)):
                                 obj_cond, rel_cond, rel_id_cond = inp
                                 this_out = all_samples[i]
                                 # this_out is actually a list of boxes!
@@ -327,10 +334,10 @@ class Trainer1D(object):
                                     for j, bbox in enumerate(bboxes[i]):
                                         image = bbox.draw(image, color=colours[j % len(colours)])
                                     images[i] = image
-                                    if self.dataset_type == 'CLEVR_1O':
-                                        size = "small" if inp[i][3] == 0 else "large"
-                                        print(f"MOD output: {size=}, bbox_size=({label[i][2]}, {label[i][3]})")
-                                wandb.log({"images": [wandb.Image(image) for image in images]}, step = self.step)
+                                    # if self.dataset_type == 'CLEVR_1O':
+                                    #     size = "small" if inp[i][3] == 0 else "large"
+                                    #     print(f"MOD output: {size=}, bbox_size=({label[i][2]}, {label[i][3]})")
+                                self.wandb.log({"images": [wandb.Image(image) for image in images]}, step = self.step)
                         else:
                             raise NotImplementedError
                         # if self.metric == 'mse':
@@ -350,8 +357,7 @@ class Trainer1D(object):
 
         accelerator.print('training complete')
 
-        if self.wandb:
-            wandb.finish()
+        
 
     # def eval(self, single_image_eval, data_loader, show_off_mode = False, repeat = 8, wandb_drawer = None):
     #     accelerator = self.accelerator

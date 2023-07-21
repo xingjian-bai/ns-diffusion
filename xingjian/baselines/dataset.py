@@ -22,12 +22,11 @@ class BoundingBox:
         """
         self.pos: [cx, cy, w, h]
         """
-
-        # if list, turn to tensor
+        if isinstance(pos, np.ndarray):
+            pos = torch.tensor(pos)        
         if isinstance(pos, list):
             pos = torch.tensor(pos)
-
-            
+        
         assert len(pos) == 4, f"pos should be a list of length 4, but got {pos}"
         if pos_type == "lurb":
             self.pos = [(pos[0] + pos[2]) / 2, (pos[1] + pos[3]) / 2, pos[2] - pos[0], pos[3] - pos[1]]
@@ -87,6 +86,9 @@ def draw_bboxes(bboxes, image = Image.new("RGB", (128, 128), (255, 255, 255))):
     image = image.copy()
     for bbox in bboxes:
         # print(f"draw_bboxes: bbox = {bbox}")
+        if isinstance(bbox, torch.Tensor):
+            bbox = BoundingBox(bbox)
+
         image = bbox.draw(image)
     return image
 
@@ -120,7 +122,8 @@ class Object:
     def __str__(self, mode="normal") -> str:
         if mode == "normal":
             # print(f"color_idx = {self.color_idx}, material_idx = {self.material_idx}, shape_idx = {self.shape_idx}, size_idx = {self.size_idx}")
-            return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.materials[self.material_idx]} {Object.shapes[self.shape_idx]}"
+            # return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.materials[self.material_idx]} {Object.shapes[self.shape_idx]}"
+            return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.shapes[self.shape_idx]}"
         else:
             raise NotImplementedError
 
@@ -205,27 +208,101 @@ def prompt(objects = [], relations = []):
 
 def gen_rand_object():
     #in list form
-    color_idx = np.random.randint(0, len(Object.colors))
-    material_idx = np.random.randint(0, len(Object.materials))
-    shape_idx = np.random.randint(0, len(Object.shapes))
-    size_idx = np.random.randint(0, len(Object.sizes))
+    color_idx = np.random.randint(0, len(Object.colors) - 1)
+    material_idx = np.random.randint(0, len(Object.materials) - 1)
+    shape_idx = np.random.randint(0, len(Object.shapes) - 1)
+    size_idx = np.random.randint(0, len(Object.sizes) - 1)
     return [color_idx, material_idx, shape_idx, size_idx]
 
-# def gen_rand_scene(num_objects, num_relations):
-#     objects = []
-#     relations = []
-#     for i in range(num_objects):
-#         objects.append(gen_rand_object())
-#     for i in range(num_relations):
-#         obj1_idx = i % len(objects)
-#         obj2_idx = np.random.randint(0, len(objects))
-#         while obj1_idx == obj2_idx:
-#             obj2_idx = np.random.randint(0, len(objects))
-#         relations.append(gen_rand_relation(objects[obj1_idx], objects[obj2_idx]))
-#     return objects, relations
-# def gen_prompt(num_objects, num_relations):
-#     objects, relations = gen_rand_scene(num_objects, num_relations)
-#     return prompt(relations = relations)
+def gen_rand_relations(generated_object_num, relation_threshold = 0.05):
+    relations = np.zeros((generated_object_num, generated_object_num, 7))
+
+    empty_graph = True
+    while empty_graph:
+        x_axis = np.random.rand(generated_object_num)
+        y_axis = np.random.rand(generated_object_num)
+
+        for a in range(generated_object_num):
+            for b in range(generated_object_num):
+                if a == b:
+                    continue
+                if x_axis[a] < x_axis[b] - relation_threshold or x_axis[b] < x_axis[a] - relation_threshold or y_axis[a] < y_axis[b] - relation_threshold or y_axis[b] < y_axis[a] - relation_threshold:
+                    empty_graph = False
+                relations[a][b][0] = x_axis[a] < x_axis[b] - relation_threshold
+                relations[a][b][1] = x_axis[b] < x_axis[a] - relation_threshold
+                relations[a][b][2] = y_axis[a] < y_axis[b] - relation_threshold
+                relations[a][b][3] = y_axis[b] < y_axis[a] - relation_threshold
+    return relations
+
+def draw_scene_graph(objects, relations, relations_ids = None, resolution = 128):
+    if isinstance(objects[0], torch.Tensor):
+        objects = [Object(*obj) for obj in objects]
+    if isinstance(relations[0], torch.Tensor):
+        new_relations = []
+        print("before:", relations, relations_ids)
+        for i in range(len(relations)):
+            a, b = relations_ids[i]
+            if a >= b:
+                continue 
+            new_relations.append(Relation(relations[i][-1], objects[int(relations_ids[i][0])], objects[int(relations_ids[i][1])], relations_ids[i]))
+        relations = new_relations
+    import networkx as nx
+    import matplotlib.pyplot as plt
+
+    scene_graph = nx.DiGraph()
+    # print("objects: ", objects)
+
+    # matrix of string
+    adj_matrix = {}
+    for object in objects:
+        print(f"draw node {str(object)}")
+        object_break_line = str(object).replace(' ', '\n')
+        scene_graph.add_node(str(object))
+    for (i, relation) in enumerate(relations):
+        
+        a = str(relation.obj1)
+        b = str(relation.obj2)
+        # test if (a, b) is in adj_matrix
+        if (a, b) not in adj_matrix.keys():
+            adj_matrix[(a, b)] = relation.relation
+        else:
+            adj_matrix[(a, b)] += f"&{relation.relation}"
+    for (a, obj1) in enumerate(objects):
+        for (b, obj2) in enumerate(objects):
+            if a >= b:
+                continue
+            a_str = str(obj1)
+            b_str = str(obj2)
+            if (a_str, b_str) in adj_matrix:
+                print("real draw: ", a_str, b_str, adj_matrix[(a_str, b_str)])
+                scene_graph.add_edge(a_str, b_str, label=adj_matrix[(a_str, b_str)])
+
+    plt.figure(dpi=resolution)
+    pos = nx.spring_layout(scene_graph)  # positions for all nodes
+
+    # nodes
+    nx.draw_networkx_nodes(scene_graph, pos, node_size=500)
+    # edges
+    nx.draw_networkx_edges(scene_graph, pos, width=3)
+    # labels
+    # node_colors = {str(obj): 'green' for obj in objects}
+    nx.draw_networkx_labels(scene_graph, pos, font_size=10, font_family='sans-serif')
+    nx.draw_networkx_edge_labels(scene_graph, pos, edge_labels=nx.get_edge_attributes(scene_graph, 'label'))
+
+    # Save the current figure to a BytesIO object
+    import io
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=500)
+    # Closing the figure so that it won't be displayed in your environment
+    plt.close()
+    buf.seek(0)
+
+    # Create a PIL image from the BytesIO object
+    img = Image.open(buf)
+
+    # Now img is a PIL image
+    return img
+
 
 
 class RelationalDataset(Dataset):
@@ -259,6 +336,7 @@ class RelationalDataset(Dataset):
         num_upperbound = None,
         generated_object_num = 3,
         generated_data_num = 1000,
+        pos_type = "lurb"
     ):
         self.center_crop = center_crop
         self.pick_one_relation = pick_one_relation
@@ -275,25 +353,20 @@ class RelationalDataset(Dataset):
 
             for i in range(generated_data_num):
                 objects = np.array([gen_rand_object() for _ in range(generated_object_num)])
-                relations = np.zeros((generated_object_num, generated_object_num, 7))
-                bboxes = np.random.randint(0, 128, (generated_object_num, 4))
-                for a in range(generated_object_num):
-                    for b in range(generated_object_num):
-                        if a >= b:
-                            continue
-                        #random number of 0 or 1
-                        relations[a][b][0] = relations[b][a][1] = np.random.randint(0, 2)
-                        relations[a][b][1] = relations[b][a][0] = not relations[a][b][0]
-                        relations[a][b][2] = relations[b][a][3] = np.random.randint(0, 2)
-                        relations[a][b][3] = relations[b][a][2] = not relations[a][b][2]
+                relations = gen_rand_relations(generated_object_num)
+                bboxes = np.random.uniform(-1, 1, (generated_object_num, 4))
+                #turn bboxes to Double type
+                bboxes = bboxes.astype(np.double)
+                
                 self.data['objects'].append(objects)
                 self.data['relations'].append(relations)
                 self.data['bboxes'].append(bboxes)
-                print("Generating data: ", objects, relations)
+                # print("Generating data: ", objects, relations)
             
             self.data['objects'] = np.array(self.data['objects'])
             self.data['relations'] = np.array(self.data['relations'])
             self.data['bboxes'] = np.array(self.data['bboxes'])
+            pos_type = "cwh"
 
         train_indices, test_indices = train_test_split(
             range(len(self.data['objects'])), 
@@ -314,7 +387,9 @@ class RelationalDataset(Dataset):
         
         colours = [(166, 0, 0), (0, 166, 0), (0, 0, 166), (166, 166, 0), (166, 0, 166), (0, 166, 166), (166, 166, 166)]
         self.objects = [[Object(*obj) for obj in objects] for objects in self.data['objects'][indices]]
-        self.bboxes = [[BoundingBox(bbox, pos_type="lurb", color = colours[i % len(colours)]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
+        self.bboxes = [[BoundingBox(bbox, pos_type=pos_type, color = colours[i % len(colours)]) for i, bbox in enumerate(bboxes) ] for bboxes in self.data['bboxes'][indices]]
+
+        # print("boxes[0]", self.bboxes[0][0].tensorize(), self.data['bboxes'][indices][0][0])
 
         for objects, bboxes in zip(self.objects, self.bboxes):
             for obj, bbox in zip(objects, bboxes):
@@ -328,7 +403,7 @@ class RelationalDataset(Dataset):
             self.image_data = np.load(image_path)
             self.images = [Image.fromarray(image) for image in self.image_data['images'][indices]]
         else:
-            print("Generating images from bboxes")
+            print("Empty images")
             self.images = [Image.new("RGB", (128, 128), (255, 255, 255)) for _ in range(len(indices))]
 
         self.all_raw_relations = self.data['relations'][indices]

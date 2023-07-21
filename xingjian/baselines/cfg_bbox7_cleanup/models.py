@@ -135,6 +135,7 @@ class BiDenoise(nn.Module):
 
             # noise from relation denoiser
             rel_cond_datum = rel_cond[i]
+            # print("before bug, ", positions[i], "rel_ids: ", rel_ids[i])
             positions_datum = torch.stack([torch.cat([positions[i, a], positions[i, b]], dim=-1) for (a, b) in rel_ids[i]])
             t_datum = torch.stack([t[i] for _ in range(rel_cond_datum.shape[0])])
             rel_out = self.rel_denoise(rel_cond_datum, positions_datum, t_datum)

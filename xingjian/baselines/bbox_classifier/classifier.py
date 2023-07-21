@@ -70,6 +70,10 @@ class RelationClassifierDataset(Dataset):
             self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_old.npz', split = "test"))
         elif dataset_type == "4O-test":
             self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_old.npz', split = "test"))
+        elif dataset_type == "5O-test":
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old.npz', split = "test"))
+        elif dataset_type == "8O-test":
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old.npz', split = "test"))
         else:
             raise NotImplementedError
         self.dataset_type = dataset_type
@@ -154,6 +158,8 @@ def trainer(model, train_dataset, test_datasets, epochs=400, batch_size=32, lr=0
                         f"{test_datasets[0].dataset_type}_accuracy": accuracies[0],
                         f"{test_datasets[1].dataset_type}_accuracy": accuracies[1],
                         f"{test_datasets[2].dataset_type}_accuracy": accuracies[2],
+                        f"{test_datasets[3].dataset_type}_accuracy": accuracies[3],
+                        f"{test_datasets[4].dataset_type}_accuracy": accuracies[4],
                         "train_accuracy": train_accuracy, 
                         "epoch": epoch+1}, 
                         step = epoch+1)
@@ -180,6 +186,8 @@ if __name__ == "__main__":
     test_datasets.append(RelationClassifierDataset(dataset_type = "2O-test"))
     test_datasets.append(RelationClassifierDataset(dataset_type = "3O-test"))
     test_datasets.append(RelationClassifierDataset(dataset_type = "4O-test"))
+    test_datasets.append(RelationClassifierDataset(dataset_type = "5O-test"))
+    test_datasets.append(RelationClassifierDataset(dataset_type = "8O-test"))
 
     trainer(model, train_dataset, test_datasets, use_wandb = args.wandb, args = args)
 
