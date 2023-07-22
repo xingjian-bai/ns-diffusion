@@ -36,8 +36,8 @@ class RelationalDataset4O(RelationalDataset):
 
 
 class RelationalDataset2O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/combined_file.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced_imgs/combined_file.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False):
         super().__init__(self.path, uncond_image_type=uncond_image_type, center_crop=center_crop, pick_one_relation=pick_one_relation, image_path=self.image_path)
 

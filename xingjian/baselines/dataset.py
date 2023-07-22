@@ -94,16 +94,16 @@ def draw_bboxes(bboxes, image = Image.new("RGB", (128, 128), (255, 255, 255))):
 
 class Object:
     shapes = ["cube", "sphere", "cylinder", "none"]
+    sizes = ["small", "large", "none"]
     colors = ["gray", "red", "blue", "green", "brown", "purple", "cyan", "yellow", "none"]
     materials = ["rubber", "metal", "none"]
-    sizes = ["small", "large", "none"]
-    # Ryan's order : color, material, shape, size
+    # order: shape, size, color, material
 
-    def __init__(self, color_idx, material_idx, shape_idx, size_idx):
-        self.color_idx = color_idx
-        self.material_idx = material_idx
+    def __init__(self, shape_idx, size_idx, color_idx, material_idx):
         self.shape_idx = shape_idx
         self.size_idx = size_idx
+        self.color_idx = color_idx
+        self.material_idx = material_idx
 
         assert self.color_idx < len(Object.colors), f"color_idx should be less than {len(Object.colors)}, but got {self.color_idx}"
         assert self.material_idx < len(Object.materials), f"material_idx should be less than {len(Object.materials)}, but got {self.material_idx}"
@@ -111,7 +111,7 @@ class Object:
         assert self.size_idx < len(Object.sizes), f"size_idx should be less than {len(Object.sizes)}, but got {self.size_idx}"
     
     def tensorize(self):
-        ret = torch.tensor([self.color_idx, self.material_idx, self.shape_idx, self.size_idx])
+        ret = torch.tensor([self.shape_idx, self.size_idx, self.color_idx, self.material_idx])
         assert ret.shape == (4,)
         return ret
 
@@ -121,11 +121,12 @@ class Object:
     
     def __str__(self, mode="normal") -> str:
         if mode == "normal":
-            # print(f"color_idx = {self.color_idx}, material_idx = {self.material_idx}, shape_idx = {self.shape_idx}, size_idx = {self.size_idx}")
-            # return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.materials[self.material_idx]} {Object.shapes[self.shape_idx]}"
-            return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.shapes[self.shape_idx]}"
+            return f"a {Object.sizes[self.size_idx]} {Object.colors[self.color_idx]} {Object.materials[self.material_idx]} {Object.shapes[self.shape_idx]}"
         else:
             raise NotImplementedError
+    def str_with_break_line(self):
+        return f"{Object.sizes[self.size_idx]}\n{Object.colors[self.color_idx]}\n{Object.materials[self.material_idx]}\n{Object.shapes[self.shape_idx]}"
+
 
 class Relation:
     relations = ["left", "right", "front", "behind", "below", "above", "none"]
@@ -212,7 +213,7 @@ def gen_rand_object():
     material_idx = np.random.randint(0, len(Object.materials) - 1)
     shape_idx = np.random.randint(0, len(Object.shapes) - 1)
     size_idx = np.random.randint(0, len(Object.sizes) - 1)
-    return [color_idx, material_idx, shape_idx, size_idx]
+    return [shape_idx, size_idx, color_idx, material_idx]
 
 def gen_rand_relations(generated_object_num, relation_threshold = 0.05):
     relations = np.zeros((generated_object_num, generated_object_num, 7))
@@ -254,30 +255,32 @@ def draw_scene_graph(objects, relations, relations_ids = None, resolution = 128)
 
     # matrix of string
     adj_matrix = {}
-    for object in objects:
-        print(f"draw node {str(object)}")
-        object_break_line = str(object).replace(' ', '\n')
-        scene_graph.add_node(str(object))
+    # for object in objects:
+    #     print(f"draw node {str(object)}")
+    #     object_break_line = str(object).replace(' ', '\n')
+    #     scene_graph.add_node(str(object))
     for (i, relation) in enumerate(relations):
-        
-        a = str(relation.obj1)
-        b = str(relation.obj2)
+        a = relation.obj1.str_with_break_line() + str(relation.obj_indices[0].item())
+        b = relation.obj2.str_with_break_line() + str(relation.obj_indices[1].item())
         # test if (a, b) is in adj_matrix
+        # print(f"adding potential edges: {a}, {b}")
         if (a, b) not in adj_matrix.keys():
             adj_matrix[(a, b)] = relation.relation
         else:
-            adj_matrix[(a, b)] += f"&{relation.relation}"
+            adj_matrix[(a, b)] += f" & {relation.relation}"
     for (a, obj1) in enumerate(objects):
         for (b, obj2) in enumerate(objects):
             if a >= b:
                 continue
-            a_str = str(obj1)
-            b_str = str(obj2)
+            a_str = obj1.str_with_break_line() + str(a)
+            b_str = obj2.str_with_break_line() + str(b)
+            # print("checking edges for ", a_str, b_str)
             if (a_str, b_str) in adj_matrix:
-                print("real draw: ", a_str, b_str, adj_matrix[(a_str, b_str)])
+                # print("real draw: ", a_str, b_str, adj_matrix[(a_str, b_str)])
                 scene_graph.add_edge(a_str, b_str, label=adj_matrix[(a_str, b_str)])
 
-    plt.figure(dpi=resolution)
+    # small dpi
+    plt.figure(figsize=(4, 4), dpi=100)
     pos = nx.spring_layout(scene_graph)  # positions for all nodes
 
     # nodes
@@ -292,7 +295,7 @@ def draw_scene_graph(objects, relations, relations_ids = None, resolution = 128)
     # Save the current figure to a BytesIO object
     import io
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=500)
+    plt.savefig(buf, format='png', dpi = 100)
     # Closing the figure so that it won't be displayed in your environment
     plt.close()
     buf.seek(0)

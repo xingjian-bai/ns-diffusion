@@ -23,19 +23,17 @@ def show_image(image):
 #     dst.paste(im2, (im1.width, 0))
 #     return dst
 def combine_images(im1, im2):
-    # Resize im2 to match the height of im1, maintaining aspect ratio
-    aspect_ratio = im2.width / im2.height
-    new_height = im1.height
-    new_width = int(aspect_ratio * new_height)
-    im2_resized = im2.resize((new_width, new_height))
+    max_height = max(im1.height, im2.height)
+    im1_new_width = int(im1.width * max_height / im1.height)
+    im2_new_width = int(im2.width * max_height / im2.height)
+    im1_resized = im1.resize((im1_new_width, max_height))
+    im2_resized = im2.resize((im2_new_width, max_height))
 
-    # Create a new image that fits both the images
-    dst = Image.new('RGB', (im1.width + im2_resized.width, im1.height))
-
-    # Paste the images onto the new image
-    dst.paste(im1, (0, 0))
-    dst.paste(im2_resized, (im1.width, 0))
-
+    # Create a new image that fits both the resized images
+    new_width = im1_resized.width + im2_resized.width
+    dst = Image.new('RGB', (new_width, max_height))
+    dst.paste(im1_resized, (0, 0))
+    dst.paste(im2_resized, (im1_resized.width, 0))
     return dst
 
 def tensor_to_pil(image_tensor: torch.Tensor) -> Image:

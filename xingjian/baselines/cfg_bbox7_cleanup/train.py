@@ -14,7 +14,7 @@ from models import BiDenoise
 
 
 parser = argparse.ArgumentParser(description='Train Diffusion Reasoning Model')
-parser.add_argument('--batch_size', default=128, type=int, help='size of batch of input to use')
+parser.add_argument('--batch_size', default=64, type=int, help='size of batch of input to use')
 parser.add_argument('--data-workers', type=int, default=1, help='number of workers to use for data loading')
 parser.add_argument('--dataset', type=str, default='CLEVR_2O', help='dataset to use')
 parser.add_argument('--wandb', default=False, action='store_true', help='use wandb')
@@ -26,7 +26,7 @@ parser.add_argument('--rel_only', default=False, action='store_true', help='use 
 parser.add_argument('--obj_only', default=False, action='store_true', help='use wandb')
 
 
-def train_on(FLAGS, dataset_name, model, steps=700000, wandb_drawer = None, global_step = 0):
+def train_on(FLAGS, dataset_name, model, steps=1000000, wandb_drawer = None, global_step = 0):
     dataset = AdaptedDataset(dataset=dataset_name)
     dataloader = DataLoader(dataset, batch_size=FLAGS.batch_size, shuffle=False, num_workers=FLAGS.data_workers, collate_fn=collate_adapted)
         
@@ -86,11 +86,11 @@ if __name__ == "__main__":
     elif FLAGS.dataset == "mixed234":
         global_step = 0
         while True:
-            train_on(FLAGS, "CLEVR_2O", model,steps=1000, wandb_drawer = wandb_drawer, global_step = global_step)
+            train_on(FLAGS, "CLEVR_2O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
             global_step += 1000
-            train_on(FLAGS, "CLEVR_3O", model,steps=1000, wandb_drawer = wandb_drawer, global_step = global_step)
+            train_on(FLAGS, "CLEVR_3O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
             global_step += 1000
-            train_on(FLAGS, "CLEVR_4O", model,steps=1000, wandb_drawer = wandb_drawer, global_step = global_step)
+            train_on(FLAGS, "CLEVR_4O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
             global_step += 1000
     else:
         raise ValueError('Dataset not supported')

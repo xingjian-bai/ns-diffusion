@@ -9,7 +9,7 @@ all_images = []
 
 for file in file_list:
     # Load each file
-    path = "/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/"
+    path = "/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced_imgs/"
     data = np.load(path + file)
 
     # Append the 'images' array from each file to all_images
@@ -19,4 +19,4 @@ for file in file_list:
 all_images = np.concatenate(all_images, axis=0)
 
 # Save all images into one .npz file
-np.savez("combined_file.npz", images=all_images)
+np.savez(path + "combined_file.npz", images=all_images)

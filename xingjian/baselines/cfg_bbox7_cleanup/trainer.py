@@ -86,7 +86,7 @@ class Trainer1D(object):
         ema_update_every = 10,
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
-        save_and_sample_every = 100,
+        save_and_sample_every = 1000,
         num_samples = 25,
         data_workers = None,
         results_folder = './results',
@@ -232,7 +232,7 @@ class Trainer1D(object):
         step_limit = self.train_num_steps + self.step
         with tqdm(initial = self.step, total = step_limit, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
             
-            tqdm_update_freq = 100 
+            tqdm_update_freq = 50 
 
             while self.step < step_limit:
                 total_loss = 0.
@@ -281,7 +281,7 @@ class Trainer1D(object):
                 nn_time = time.time() - end_time; end_time = time.time()
                 
                 if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
-                    pbar.set_description(f'loss: {total_loss:.4f} loss_denoise: {loss_denoise:.4f} loss_energy: {loss_energy:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+                    pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
                     pbar.update(tqdm_update_freq)
                 if self.wandb:
                     self.wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
@@ -327,16 +327,27 @@ class Trainer1D(object):
 
                             
                             if self.wandb:
+                                start_time = time.time()
                                 for i, image in enumerate(images):
                                     if isinstance(image, torch.Tensor):
                                         image = tensor_to_pil(image)
                                     colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
                                     for j, bbox in enumerate(bboxes[i]):
                                         image = bbox.draw(image, color=colours[j % len(colours)])
+                                    
+                                    # added scene graph
+                                    objects, relations, relations_ids = inp
+                                    from dataset import draw_scene_graph
+                                    scene_graph = draw_scene_graph(objects[i], relations[i], relations_ids[i])
+                                    image = combine_images(image, scene_graph)
+
                                     images[i] = image
                                     # if self.dataset_type == 'CLEVR_1O':
                                     #     size = "small" if inp[i][3] == 0 else "large"
                                     #     print(f"MOD output: {size=}, bbox_size=({label[i][2]}, {label[i][3]})")
+                                    time_spent = time.time() - start_time
+                                    start_time = time.time()
+                                    print("genearting images, takes: ", time_spent, "s")
                                 self.wandb.log({"images": [wandb.Image(image) for image in images]}, step = self.step)
                         else:
                             raise NotImplementedError
