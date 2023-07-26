@@ -1,32 +1,80 @@
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+# from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
+from trainer import Trainer
+from PIL import Image
+from models import Unet
+from diffuser import GaussianDiffusion
+import argparse
+import random
+import math
+import torch
+from torch.utils.data import Dataset, DataLoader
+# from image_adapted_dataset import
+# from models import BiDenoise
 
-model = Unet(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8),
-    flash_attn = True
-)
+parser = argparse.ArgumentParser(description='Train Diffusion Reasoning Model')
+# parser.add_argument('--batch_size', default=64, type=int, help='size of batch of input to use')
+# parser.add_argument('--data-workers', type=int, default=1, help='number of workers to use for data loading')
+parser.add_argument('--dataset', type=str, default='CLEVR_1O', help='dataset to use')
+parser.add_argument('--wandb', default=False, action='store_true', help='use wandb')
+# parser.add_argument('--metric', type=str, default='visualize', help='metric to use')
+# parser.add_argument('--beta_schedule', type=str, default='cosine', help='beta schedule to use')
+parser.add_argument('--name', type=str, help='name of experiment')
+# parser.add_argument('--no_obj', default=False, action='store_true', help='use wandb')
+# parser.add_argument('--rel_only', default=False, action='store_true', help='use wandb')
+# parser.add_argument('--obj_only', default=False, action='store_true', help='use wandb')
 
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 128,
-    timesteps = 1000,           # number of steps
-    sampling_timesteps = 250    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
-)
 
-trainer = Trainer(
-    diffusion,
-    'path/to/your/images',
-    train_batch_size = 32,
-    train_lr = 8e-5,
-    train_num_steps = 700000,         # total training steps
-    gradient_accumulate_every = 2,    # gradient accumulation steps
-    ema_decay = 0.995,                # exponential moving average decay
-    amp = True,                       # turn on mixed precision
-    calculate_fid = True              # whether to calculate fid during training
-)
+if __name__ == "__main__":
+    args = parser.parse_args()
 
-trainer.train()
+    if args.wandb:
+        import wandb
+        wandb_drawer = wandb.init(
+                project="diffusion_image",
+                name=f'{args.name}-{args.dataset}',
+                save_code=True,
+            )
+    else:
+        wandb_drawer = None
 
+
+    from dataset_image_adopted import AdaptedDataset
+    dataset = AdaptedDataset(dataset=args.dataset)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=1)
+
+    model = Unet(
+        dim = 64,
+        dim_mults = (1, 2, 4, 8),
+        flash_attn = True
+    )
+    print("in main, prepared model")
+
+    diffusion = GaussianDiffusion(
+        model,
+        image_size = 128,
+        timesteps = 1000,           # number of steps
+        sampling_timesteps = 250    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
+    )
+    print("in main, prepared diffusion")
+
+
+    trainer = Trainer(
+        diffusion,
+        dataset_type = args.dataset,
+        dataloader = dataloader,
+        train_batch_size = 16,
+        train_lr = 8e-5,
+        train_num_steps = 700000,         # total training steps
+        gradient_accumulate_every = 2,    # gradient accumulation steps
+        ema_decay = 0.995,                # exponential moving average decay
+        amp = True,                       # turn on mixed precision
+        calculate_fid = False,              # whether to calculate fid during training
+        wandb_drawer = wandb_drawer,
+        name = args.name,
+    )
+    print("in main, prepared trainer")
+
+    trainer.train()
 
 # import argparse
 # import random

@@ -10,7 +10,6 @@ import torch.nn.functional as F
 from torch.utils.data.dataset import Dataset
 from torch.utils.data import Dataset, DataLoader
 
-from one_box_dataset import AdaptedDataset, collate_adapted
 
 import copy
 from pathlib import Path

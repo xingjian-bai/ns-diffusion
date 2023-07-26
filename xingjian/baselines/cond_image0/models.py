@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.utils.data.dataset import Dataset
 from torch.utils.data import Dataset, DataLoader
 
-from one_box_dataset import AdaptedDataset, collate_adapted
+# from one_box_dataset import AdaptedDataset, collate_adapted
 
 import copy
 from pathlib import Path
@@ -329,6 +329,11 @@ class Unet(nn.Module):
         return 2 ** (len(self.downs) - 1)
 
     def forward(self, x, time, x_self_cond = None):
+        """
+        Args:
+            x: image tensor of shape [batch_size, channels, height, width]
+            time: time embedding tensor of shape [batch_size, time_dim]
+        """
         assert all([divisible_by(d, self.downsample_factor) for d in x.shape[-2:]]), f'your input dimensions {x.shape[-2:]} need to be divisible by {self.downsample_factor}, given the unet'
 
         if self.self_condition:

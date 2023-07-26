@@ -7,16 +7,12 @@ import sys
 import time
 from multiprocessing import cpu_count
 from pathlib import Path
-from random import random
-from functools import partial
-from collections import namedtuple
 from tabulate import tabulate
 from PIL import Image, ImageDraw
 
 import torch
 from accelerate import Accelerator
 from ema_pytorch import EMA
-from torch import nn, einsum
 import torch.nn.functional as F
 
 from einops import rearrange, reduce
@@ -30,7 +26,6 @@ from utils import *
 
 from tqdm.auto import tqdm
 import wandb
-from diffuser import GaussianDiffusion1D
 
 
 # def _custom_exception_hook(type, value, tb):
@@ -77,14 +72,14 @@ class Trainer(object):
     def __init__(
         self,
         diffusion_model,
-        
         *,
-        dataset_folder = None,
+        # dataset_folder = None,
         dataset_type: str = 'CLEVR_2O',
         real_dataset_name = None,
         dataset: Dataset = None,
         dataloader: DataLoader = None,
         train_batch_size = 16,
+        eval_batch_size = 8,
         gradient_accumulate_every = 1,
         augment_horizontal_flip = True,
         train_lr = 1e-4,
@@ -92,7 +87,7 @@ class Trainer(object):
         ema_update_every = 10,
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
-        save_and_sample_every = 1000,
+        save_and_sample_every = 200,
         num_samples = 25,
         results_folder = './results',
         amp = False,
@@ -105,7 +100,7 @@ class Trainer(object):
         num_fid_samples = 50000,
         save_best_and_latest_only = False,
         wandb_drawer = None,
-        name = 'default-trainer'
+        name = 'default-trainer',
         starting_step = 0,
     ):
         super().__init__()
@@ -130,6 +125,7 @@ class Trainer(object):
         self.save_and_sample_every = save_and_sample_every
 
         self.batch_size = train_batch_size
+        self.eval_batch_size = eval_batch_size
         self.gradient_accumulate_every = gradient_accumulate_every
         assert (train_batch_size * gradient_accumulate_every) >= 16, f'your effective batch size (train_batch_size x gradient_accumulate_every) should be at least 16 or above'
 
@@ -143,7 +139,7 @@ class Trainer(object):
             real_dataset_name = dataset_type
         self.real_dataset_name = real_dataset_name
 
-        self.wandb = wandb_drawer
+        self.wandb_drawer = wandb_drawer
         self.name = name
         self.dataset_type = dataset_type
         if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O':
@@ -209,6 +205,7 @@ class Trainer(object):
             self.best_fid = 1e10 # infinite
 
         self.save_best_and_latest_only = save_best_and_latest_only
+        print(f"in trainer, finished init")
 
     @property
     def device(self):
@@ -228,7 +225,6 @@ class Trainer(object):
             'opt': self.opt.state_dict(),
             'ema': self.ema.state_dict(),
             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
-            'version': __version__
         }
 
         torch.save(data, str(self.results_folder / f'{self.get_train_name()}-{milestone}.pt'))
@@ -267,18 +263,21 @@ class Trainer(object):
                 total_loss = 0.
 
                 for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl).to(device)
+                    data = next(self.dl)
 
                     if self.dataset_type == 'CLEVR_1O' or self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O':
-                        # for image g
-                        objects, relations, label, prompts, images, relations_ids = data
-                        inp = (objects, relations, relations_ids)
-                        mask = None
+                        # in image generation, all needed are images, objects, bboxes, relations, relations_ids
+                        images, objects, bboxes, relations, relations_ids = data
+                        images, objects, bboxes, relations, relations_ids = images.to(device), objects.to(device), bboxes.to(device), relations.to(device), relations_ids.to(device)
+                        # inp = (objects, relations, relations_ids)
+                        # mask = None
                     else:
-                        raise NotImplementError
+                        raise NotImplementedError
+                    
+                    data_time = time.time() - end_time; end_time = time.time()
 
                     with self.accelerator.autocast():
-                        loss = self.model(data)
+                        loss = self.model(images)
                         loss = loss / self.gradient_accumulate_every
                         total_loss += loss.item()
 
@@ -294,338 +293,369 @@ class Trainer(object):
 
                 accelerator.wait_for_everyone()
 
+                nn_time = time.time() - end_time; end_time = time.time()
+                
+                if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
+                    pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+                    pbar.update(tqdm_update_freq)
+                if self.wandb_drawer:
+                    self.wandb_drawer.log({"loss": total_loss, "step": self.step}, step = self.step)
                 self.step += 1
+
+
                 if accelerator.is_main_process:
                     self.ema.update()
 
                     if self.step != 0 and divisible_by(self.step, self.save_and_sample_every):
                         self.ema.ema_model.eval()
 
+                        print(f"in trainer, entered eval with step={self.step}")
+
+                        images_eval = images[:self.eval_batch_size]
+                        # objects_eval = objects[:self.eval_batch_size]
+                        # bboxes_eval = bboxes[:self.eval_batch_size]
+                        # relations_eval = relations[:self.eval_batch_size]
+                        # relations_ids_eval = relations_ids[:self.eval_batch_size]
+
                         with torch.inference_mode():
                             milestone = self.step // self.save_and_sample_every
-                            batches = num_to_groups(self.num_samples, self.batch_size)
-                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n), batches))
+                            all_sampled_images = self.ema.ema_model.sample(batch_size=self.eval_batch_size)
+                        
+                        # visualized_images = []
+                        # for i in range(self.eval_batch_size):
+                            # vis_image = 
 
-                        all_images = torch.cat(all_images_list, dim = 0)
+                        # print("shape of all_sampled_images: ", all_sampled_images.shape)
 
-                        utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                        assert all_sampled_images.shape[0] == self.eval_batch_size, "all_sampled_images has wrong shape!"
+                        # print("type of all_sampled_images: ", type(all_sampled_images), type(all_sampled_images[0]))
+                        if self.wandb_drawer:
+                            self.wandb_drawer.log({"generated-ts": [wandb.Image(image) for image in all_sampled]}, step = self.step)
+                            self.wandb_drawer.log({"generated-pil": [wandb.Image(tensor_to_pil(image)) for image in all_sampled_images]}, step = self.step)
+
+                            self.wandb_drawer.log({"given-ts": [wandb.Image(image) for image in images_eval]}, step = self.step)
+                            self.wandb_drawer.log({"given-pil": [wandb.Image(tensor_to_pil(image)) for image in images_eval]}, step = self.step)
+                            self.wandb_drawer.log({"given-ts2": [wandb.Image(pil_to_tensor(tensor_to_pil(image))) for image in images_eval]}, step = self.step)
+                            self.wandb_drawer.log({"given-pil2": [wandb.Image(tensor_to_pil(pil_to_tensor(tensor_to_pil(image)))) for image in images_eval]}, step = self.step)
+
+                        utils.save_image(all_sampled_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
 
                         # whether to calculate fid
 
-                        if self.calculate_fid:
-                            fid_score = self.fid_scorer.fid_score()
-                            accelerator.print(f'fid_score: {fid_score}')
-                        if self.save_best_and_latest_only:
-                            if self.best_fid > fid_score:
-                                self.best_fid = fid_score
-                                self.save("best")
-                            self.save("latest")
-                        else:
-                            self.save(milestone)
+                        # if self.calculate_fid:
+                        #     fid_score = self.fid_scorer.fid_score()
+                        #     accelerator.print(f'fid_score: {fid_score}')
+                        # if self.save_best_and_latest_only:
+                        #     if self.best_fid > fid_score:
+                        #         self.best_fid = fid_score
+                        #         self.save("best")
+                        #     self.save("latest")
+                        # else:
+                        #     self.save(milestone)
 
-                pbar.update(1)
+                # pbar.update(1)
 
         accelerator.print('training complete')
 
 
-class Trainer1D(object):
-    def __init__(
-        self,
-        diffusion_model: GaussianDiffusion1D,
-        *,
-        dataset_type: str = 'CLEVR_2O',
-        real_dataset_name = None,
-        dataset: Dataset = None,
-        dataloader: DataLoader = None,
-        train_batch_size = 128,
-        eval_batch_size = 16,
-        gradient_accumulate_every = 1,
-        train_lr = 1e-4,
-        train_num_steps = 100000,
-        ema_update_every = 10,
-        ema_decay = 0.995,
-        adam_betas = (0.9, 0.99),
-        save_and_sample_every = 1000,
-        num_samples = 25,
-        data_workers = None,
-        results_folder = './results',
-        amp = False,
-        fp16 = False,
-        split_batches = True,
-        metric = 'mse',
-        cond_mask = False,
-        wandb_drawer = None,
-        name = 'default',
-        starting_step = 0,
-    ):
-        super().__init__()
-        if real_dataset_name is None:
-            real_dataset_name = dataset_type
-        self.real_dataset_name = real_dataset_name
+# class Trainer1D(object):
+#     def __init__(
+#         self,
+#         diffusion_model: GaussianDiffusion1D,
+#         *,
+#         dataset_type: str = 'CLEVR_2O',
+#         real_dataset_name = None,
+#         dataset: Dataset = None,
+#         dataloader: DataLoader = None,
+#         train_batch_size = 128,
+#         eval_batch_size = 16,
+#         gradient_accumulate_every = 1,
+#         train_lr = 1e-4,
+#         train_num_steps = 100000,
+#         ema_update_every = 10,
+#         ema_decay = 0.995,
+#         adam_betas = (0.9, 0.99),
+#         save_and_sample_every = 1000,
+#         num_samples = 25,
+#         data_workers = None,
+#         results_folder = './results',
+#         amp = False,
+#         fp16 = False,
+#         split_batches = True,
+#         metric = 'mse',
+#         cond_mask = False,
+#         wandb_drawer = None,
+#         name = 'default',
+#         starting_step = 0,
+#     ):
+#         super().__init__()
+#         if real_dataset_name is None:
+#             real_dataset_name = dataset_type
+#         self.real_dataset_name = real_dataset_name
 
 
-        # accelerator
+#         # accelerator
 
-        self.accelerator = Accelerator(
-            split_batches = split_batches,
-            mixed_precision = 'fp16' if fp16 else 'no'
-        )
-        self.wandb = wandb_drawer
-        self.name = name
+#         self.accelerator = Accelerator(
+#             split_batches = split_batches,
+#             mixed_precision = 'fp16' if fp16 else 'no'
+#         )
+#         self.wandb = wandb_drawer
+#         self.name = name
 
-        self.accelerator.native_amp = amp
-        self.dataset_type = dataset_type
+#         self.accelerator.native_amp = amp
+#         self.dataset_type = dataset_type
 
-        # model
+#         # model
 
-        self.model = diffusion_model
+#         self.model = diffusion_model
 
-        # Conditioning on mask
+#         # Conditioning on mask
 
-        self.cond_mask = cond_mask
+#         self.cond_mask = cond_mask
 
-        # sampling and training hyperparameters
-        # self.out_dim = self.model.out_dim
+#         # sampling and training hyperparameters
+#         # self.out_dim = self.model.out_dim
 
-        assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
-        self.num_samples = num_samples
-        self.save_and_sample_every = save_and_sample_every
+#         assert has_int_squareroot(num_samples), 'number of samples must have an integer square root'
+#         self.num_samples = num_samples
+#         self.save_and_sample_every = save_and_sample_every
 
-        self.batch_size = train_batch_size
-        self.eval_batch_size = eval_batch_size
-        self.gradient_accumulate_every = gradient_accumulate_every
+#         self.batch_size = train_batch_size
+#         self.eval_batch_size = eval_batch_size
+#         self.gradient_accumulate_every = gradient_accumulate_every
 
-        self.train_num_steps = train_num_steps
+#         self.train_num_steps = train_num_steps
 
-        # Evaluation metric.
-        self.metric = metric
-        self.data_workers = data_workers
+#         # Evaluation metric.
+#         self.metric = metric
+#         self.data_workers = data_workers
 
-        if self.data_workers is None:
-            self.data_workers = cpu_count()
+#         if self.data_workers is None:
+#             self.data_workers = cpu_count()
 
-        # dataset
-        if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O':
-            dl = dataloader
-            dl = self.accelerator.prepare(dl)
-            self.dl = cycle(dl)
-        elif dataset_type == 'simple':
-            dl = DataLoader(dataset, batch_size = train_batch_size, shuffle = True, pin_memory = False, num_workers = self.data_workers)
-            dl = self.accelerator.prepare(dl)
-            self.dl = cycle(dl)
-        else:
-            print(f"attention! Dataset unorthodox! cannot performan training then")
-            # raise NotImplementedError
+#         # dataset
+#         if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O':
+#             dl = dataloader
+#             dl = self.accelerator.prepare(dl)
+#             self.dl = cycle(dl)
+#         elif dataset_type == 'simple':
+#             dl = DataLoader(dataset, batch_size = train_batch_size, shuffle = True, pin_memory = False, num_workers = self.data_workers)
+#             dl = self.accelerator.prepare(dl)
+#             self.dl = cycle(dl)
+#         else:
+#             print(f"attention! Dataset unorthodox! cannot performan training then")
+#             # raise NotImplementedError
 
         
 
-        # optimizer
+#         # optimizer
 
-        self.opt = Adam(diffusion_model.parameters(), lr = train_lr, betas = adam_betas)
+#         self.opt = Adam(diffusion_model.parameters(), lr = train_lr, betas = adam_betas)
 
-        # for logging results in a folder periodically
+#         # for logging results in a folder periodically
 
-        if self.accelerator.is_main_process:
-            self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
-            self.ema.to(self.device)
+#         if self.accelerator.is_main_process:
+#             self.ema = EMA(diffusion_model, beta = ema_decay, update_every = ema_update_every)
+#             self.ema.to(self.device)
 
-        self.results_folder = Path(results_folder)
-        self.results_folder.mkdir(exist_ok = True)
+#         self.results_folder = Path(results_folder)
+#         self.results_folder.mkdir(exist_ok = True)
 
-        # step counter state
+#         # step counter state
 
-        self.step = starting_step
+#         self.step = starting_step
 
-        # prepare model, dataloader, optimizer with accelerator
+#         # prepare model, dataloader, optimizer with accelerator
 
-        self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
+#         self.model, self.opt = self.accelerator.prepare(self.model, self.opt)
 
-    @property
-    def device(self):
-        return self.accelerator.device
+#     @property
+#     def device(self):
+#         return self.accelerator.device
 
-    def get_train_name(self):
-        return f'{self.name}--{self.model.model.BiDenoise_name()}--{self.real_dataset_name}'
+#     def get_train_name(self):
+#         return f'{self.name}--{self.model.model.BiDenoise_name()}--{self.real_dataset_name}'
 
 
-    def save(self, milestone):
-        if not self.accelerator.is_local_main_process:
-            return
+#     def save(self, milestone):
+#         if not self.accelerator.is_local_main_process:
+#             return
 
-        data = {
-            'step': self.step,
-            'model': self.accelerator.get_state_dict(self.model),
-            'opt': self.opt.state_dict(),
-            'ema': self.ema.state_dict(),
-            'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
-        }
+#         data = {
+#             'step': self.step,
+#             'model': self.accelerator.get_state_dict(self.model),
+#             'opt': self.opt.state_dict(),
+#             'ema': self.ema.state_dict(),
+#             'scaler': self.accelerator.scaler.state_dict() if exists(self.accelerator.scaler) else None,
+#         }
 
-        torch.save(data, str(self.results_folder / f'{self.get_train_name()}-{milestone}.pt'))
+#         torch.save(data, str(self.results_folder / f'{self.get_train_name()}-{milestone}.pt'))
 
-    def load(self, milestone):
-        accelerator = self.accelerator
-        device = accelerator.device
+#     def load(self, milestone):
+#         accelerator = self.accelerator
+#         device = accelerator.device
 
-        data = torch.load(str(self.results_folder / f'{self.get_train_name()}-{milestone}.pt'), map_location=device)
+#         data = torch.load(str(self.results_folder / f'{self.get_train_name()}-{milestone}.pt'), map_location=device)
 
-        model = self.accelerator.unwrap_model(self.model)
-        model.load_state_dict(data['model'])
+#         model = self.accelerator.unwrap_model(self.model)
+#         model.load_state_dict(data['model'])
 
-        self.step = data['step']
-        self.opt.load_state_dict(data['opt'])
-        if self.accelerator.is_main_process:
-            self.ema.load_state_dict(data["ema"])
+#         self.step = data['step']
+#         self.opt.load_state_dict(data['opt'])
+#         if self.accelerator.is_main_process:
+#             self.ema.load_state_dict(data["ema"])
 
-        if 'version' in data:
-            print(f"loading from version {data['version']}")
+#         if 'version' in data:
+#             print(f"loading from version {data['version']}")
 
-        if exists(self.accelerator.scaler) and exists(data['scaler']):
-            self.accelerator.scaler.load_state_dict(data['scaler'])
+#         if exists(self.accelerator.scaler) and exists(data['scaler']):
+#             self.accelerator.scaler.load_state_dict(data['scaler'])
 
-    def train(self):
-        accelerator = self.accelerator
-        device = accelerator.device
+#     def train(self):
+#         accelerator = self.accelerator
+#         device = accelerator.device
 
-        end_time = time.time()
+#         end_time = time.time()
 
-        step_limit = self.train_num_steps + self.step
-        with tqdm(initial = self.step, total = step_limit, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
+#         step_limit = self.train_num_steps + self.step
+#         with tqdm(initial = self.step, total = step_limit, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
             
-            tqdm_update_freq = 50 
+#             tqdm_update_freq = 50 
 
-            while self.step < step_limit:
-                total_loss = 0.
+#             while self.step < step_limit:
+#                 total_loss = 0.
 
-                for _ in range(self.gradient_accumulate_every):
-                    data = next(self.dl)
+#                 for _ in range(self.gradient_accumulate_every):
+#                     data = next(self.dl)
 
-                    if self.dataset_type == 'CLEVR_1O':
-                        inp, label, prompts, images = data
-                        inp, label = inp.float().to(device), label.float().to(device)
-                        # print(f"all data obtained: {inp.shape}, {label.shape}, {len(prompts)}, {len(images)}, {images[0].shape}")
-                        mask = None
-                    elif self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O':
-                        objects, relations, label, prompts, images, relations_ids = data
-                        inp = (objects, relations, relations_ids)
-                        mask = None
-                    # elif self.dataset_type == 'simple':
-                    #     inp, label = data
-                    #     mask = None
-                    #     prompts = None
-                    #     images = []
-                    #     for lab in label:
-                    #         images.append(BoundingBox(lab).draw(color = (255, 0, 0)))
-                    #     # print("check labels: ", label)
-                    else:
-                        raise NotImplementedError
+#                     if self.dataset_type == 'CLEVR_1O':
+#                         inp, label, prompts, images = data
+#                         inp, label = inp.float().to(device), label.float().to(device)
+#                         # print(f"all data obtained: {inp.shape}, {label.shape}, {len(prompts)}, {len(images)}, {images[0].shape}")
+#                         mask = None
+#                     elif self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O':
+#                         objects, relations, label, prompts, images, relations_ids = data
+#                         inp = (objects, relations, relations_ids)
+#                         mask = None
+#                     # elif self.dataset_type == 'simple':
+#                     #     inp, label = data
+#                     #     mask = None
+#                     #     prompts = None
+#                     #     images = []
+#                     #     for lab in label:
+#                     #         images.append(BoundingBox(lab).draw(color = (255, 0, 0)))
+#                     #     # print("check labels: ", label)
+#                     else:
+#                         raise NotImplementedError
 
-                    data_time = time.time() - end_time; end_time = time.time()
+#                     data_time = time.time() - end_time; end_time = time.time()
 
-                    with self.accelerator.autocast():
-                        loss, (loss_denoise, loss_energy) = self.model(inp, label, mask)
-                        loss = loss / self.gradient_accumulate_every
-                        total_loss += loss.item()
+#                     with self.accelerator.autocast():
+#                         loss, (loss_denoise, loss_energy) = self.model(inp, label, mask)
+#                         loss = loss / self.gradient_accumulate_every
+#                         total_loss += loss.item()
 
-                    self.accelerator.backward(loss)
+#                     self.accelerator.backward(loss)
 
-                accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+#                 accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
 
-                accelerator.wait_for_everyone()
+#                 accelerator.wait_for_everyone()
 
-                self.opt.step()
-                self.opt.zero_grad()
+#                 self.opt.step()
+#                 self.opt.zero_grad()
 
-                accelerator.wait_for_everyone()
+#                 accelerator.wait_for_everyone()
 
-                nn_time = time.time() - end_time; end_time = time.time()
+#                 nn_time = time.time() - end_time; end_time = time.time()
                 
-                if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
-                    pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
-                    pbar.update(tqdm_update_freq)
-                if self.wandb:
-                    self.wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
-                self.step += 1
+#                 if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
+#                     pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+#                     pbar.update(tqdm_update_freq)
+#                 if self.wandb:
+#                     self.wandb.log({"loss": total_loss, "step": self.step}, step = self.step)
+#                 self.step += 1
 
-                if accelerator.is_main_process:
-                    self.ema.update ()
+#                 if accelerator.is_main_process:
+#                     self.ema.update ()
 
-                    if self.step != 0 and self.step % self.save_and_sample_every == 0:
-                        self.ema.ema_model.eval()
-                        print(f"In eval with step={self.step}")
-                        inp = (inp[0][:self.eval_batch_size], inp[1][:self.eval_batch_size], inp[2][:self.eval_batch_size]) if self.dataset_type != 'CLEVR_1O' else inp[:self.eval_batch_size]
-                        label = label[:self.eval_batch_size]
-                        mask = mask[:self.eval_batch_size] if mask is not None else None
-                        prompts = prompts[:self.eval_batch_size] if prompts is not None else None
-                        images = images[:self.eval_batch_size]
+#                     if self.step != 0 and self.step % self.save_and_sample_every == 0:
+#                         self.ema.ema_model.eval()
+#                         print(f"In eval with step={self.step}")
+#                         inp = (inp[0][:self.eval_batch_size], inp[1][:self.eval_batch_size], inp[2][:self.eval_batch_size]) if self.dataset_type != 'CLEVR_1O' else inp[:self.eval_batch_size]
+#                         label = label[:self.eval_batch_size]
+#                         mask = mask[:self.eval_batch_size] if mask is not None else None
+#                         prompts = prompts[:self.eval_batch_size] if prompts is not None else None
+#                         images = images[:self.eval_batch_size]
 
-                        with torch.no_grad():
-                            milestone = self.step // self.save_and_sample_every
-                            all_samples_list = list(map(lambda n: self.ema.ema_model.sample(
-                                inp, label, mask,
-                                batch_size=self.eval_batch_size), range(1)))
+#                         with torch.no_grad():
+#                             milestone = self.step // self.save_and_sample_every
+#                             all_samples_list = list(map(lambda n: self.ema.ema_model.sample(
+#                                 inp, label, mask,
+#                                 batch_size=self.eval_batch_size), range(1)))
 
-                        all_samples = torch.cat(all_samples_list, dim = 0)
-                        # mse_error = (all_samples - label).pow(2).mean()
-                        if all_samples.shape[0] == self.eval_batch_size:
-                            print(f"all_samples has the expected size")
-                        else:
-                            print(f"all_samples has wrong size!", all_samples.shape[0], self.eval_batch_size, label.size(0))
+#                         all_samples = torch.cat(all_samples_list, dim = 0)
+#                         # mse_error = (all_samples - label).pow(2).mean()
+#                         if all_samples.shape[0] == self.eval_batch_size:
+#                             print(f"all_samples has the expected size")
+#                         else:
+#                             print(f"all_samples has wrong size!", all_samples.shape[0], self.eval_batch_size, label.size(0))
 
-                        if self.metric == 'visualize':
-                            rows, bboxes = [], []
-                            for i in range(label.size(0)):
-                                obj_cond, rel_cond, rel_id_cond = inp
-                                this_out = all_samples[i]
-                                # this_out is actually a list of boxes!
-                                bbox = []
-                                for e in this_out:
-                                    bbox.append(BoundingBox(e.tolist()))
-                                bboxes.append(bbox)
-                                rows.append(((obj_cond[i].tolist(), rel_cond[i].tolist(), rel_id_cond[i].tolist()), this_out.tolist(), label[i].tolist()))
-                            print(tabulate(rows))
+#                         if self.metric == 'visualize':
+#                             rows, bboxes = [], []
+#                             for i in range(label.size(0)):
+#                                 obj_cond, rel_cond, rel_id_cond = inp
+#                                 this_out = all_samples[i]
+#                                 # this_out is actually a list of boxes!
+#                                 bbox = []
+#                                 for e in this_out:
+#                                     bbox.append(BoundingBox(e.tolist()))
+#                                 bboxes.append(bbox)
+#                                 rows.append(((obj_cond[i].tolist(), rel_cond[i].tolist(), rel_id_cond[i].tolist()), this_out.tolist(), label[i].tolist()))
+#                             print(tabulate(rows))
 
                             
-                            if self.wandb:
-                                start_time = time.time()
-                                for i, image in enumerate(images):
-                                    if isinstance(image, torch.Tensor):
-                                        image = tensor_to_pil(image)
-                                    colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
-                                    for j, bbox in enumerate(bboxes[i]):
-                                        image = bbox.draw(image, color=colours[j % len(colours)])
+#                             if self.wandb:
+#                                 start_time = time.time()
+#                                 for i, image in enumerate(images):
+#                                     if isinstance(image, torch.Tensor):
+#                                         image = tensor_to_pil(image)
+#                                     colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+#                                     for j, bbox in enumerate(bboxes[i]):
+#                                         image = bbox.draw(image, color=colours[j % len(colours)])
                                     
-                                    # added scene graph
-                                    objects, relations, relations_ids = inp
-                                    from dataset import draw_scene_graph
-                                    scene_graph = draw_scene_graph(objects[i], relations[i], relations_ids[i])
-                                    image = combine_images(image, scene_graph)
+#                                     # added scene graph
+#                                     objects, relations, relations_ids = inp
+#                                     from dataset import draw_scene_graph
+#                                     scene_graph = draw_scene_graph(objects[i], relations[i], relations_ids[i])
+#                                     image = combine_images(image, scene_graph)
 
-                                    images[i] = image
-                                    # if self.dataset_type == 'CLEVR_1O':
-                                    #     size = "small" if inp[i][3] == 0 else "large"
-                                    #     print(f"MOD output: {size=}, bbox_size=({label[i][2]}, {label[i][3]})")
-                                    time_spent = time.time() - start_time
-                                    start_time = time.time()
-                                    print("genearting images, takes: ", time_spent, "s")
-                                self.wandb.log({"images": [wandb.Image(image) for image in images]}, step = self.step)
-                        else:
-                            raise NotImplementedError
-                        # if self.metric == 'mse':
-                        #     all_samples = torch.cat(all_samples_list, dim = 0)
-                        #     mse_error = (all_samples - label).pow(2).mean()
-                        #     print("mse_error: ", mse_error)
-                        # elif self.metric == 'bce':
-                        #     assert len(all_samples_list) == 1
+#                                     images[i] = image
+#                                     # if self.dataset_type == 'CLEVR_1O':
+#                                     #     size = "small" if inp[i][3] == 0 else "large"
+#                                     #     print(f"MOD output: {size=}, bbox_size=({label[i][2]}, {label[i][3]})")
+#                                     time_spent = time.time() - start_time
+#                                     start_time = time.time()
+#                                     print("genearting images, takes: ", time_spent, "s")
+#                                 self.wandb.log({"images": [wandb.Image(image) for image in images]}, step = self.step)
+#                         else:
+#                             raise NotImplementedError
+#                         # if self.metric == 'mse':
+#                         #     all_samples = torch.cat(all_samples_list, dim = 0)
+#                         #     mse_error = (all_samples - label).pow(2).mean()
+#                         #     print("mse_error: ", mse_error)
+#                         # elif self.metric == 'bce':
+#                         #     assert len(all_samples_list) == 1
 
-                        #     summary = binary_classification_accuracy_4(all_samples_list[0], label)
-                        #     rows = [[k, v] for k, v in summary.items()]
-                        #     print(tabulate(rows))
+#                         #     summary = binary_classification_accuracy_4(all_samples_list[0], label)
+#                         #     rows = [[k, v] for k, v in summary.items()]
+#                         #     print(tabulate(rows))
 
-                        self.save(milestone)
+#                         self.save(milestone)
 
                 
 
-        accelerator.print('training complete')
+#         accelerator.print('training complete')
 
         
 

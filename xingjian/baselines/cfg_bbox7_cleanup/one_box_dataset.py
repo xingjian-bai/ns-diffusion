@@ -13,16 +13,7 @@ sys.path.append('../')
 from dataset import RelationalDataset
 
 
-class RelationalDataset3O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_old.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_imgs/1.npz'
-    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False):
-        super().__init__(self.path, 
-                         uncond_image_type=uncond_image_type, 
-                         center_crop=center_crop, 
-                         pick_one_relation=pick_one_relation, 
-                         image_path=self.image_path, 
-                         split = "train", test_size = 0.1)
+
 class RelationalDataset4O(RelationalDataset):
     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_old.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_imgs/1.npz'
