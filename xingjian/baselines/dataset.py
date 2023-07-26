@@ -240,7 +240,7 @@ def draw_scene_graph(objects, relations, relations_ids = None, resolution = 128)
         objects = [Object(*obj) for obj in objects]
     if isinstance(relations[0], torch.Tensor):
         new_relations = []
-        print("before:", relations, relations_ids)
+        # print("before:", relations, relations_ids)
         for i in range(len(relations)):
             a, b = relations_ids[i]
             if a >= b:

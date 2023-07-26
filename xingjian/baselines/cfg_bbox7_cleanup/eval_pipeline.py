@@ -9,20 +9,16 @@ from torch.utils.data import Dataset, DataLoader
 import wandb
 import sys
 sys.path.append('../')
-from dataset import RelationalDataset, BoundingBox
+from dataset_clevr_ryan import RelationalDataset, BoundingBox
 from utils import *
 from tqdm.auto import tqdm
 
 from einops import rearrange, reduce
 from einops.layers.torch import Rearrange
 
-
-
-
-
 class RelationalDataset2O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_imgs/combined_file.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced_imgs/combined_file.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
         super().__init__(self.path, 
                          uncond_image_type=uncond_image_type, 
@@ -32,20 +28,20 @@ class RelationalDataset2O(RelationalDataset):
                          split = "test", num_upperbound = args.num_upperbound)
     
 
-class RelationalDataset1O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
-    def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
-        super().__init__(self.path, 
-                         uncond_image_type=uncond_image_type, 
-                         center_crop=center_crop, 
-                         pick_one_relation=pick_one_relation, 
-                         image_path=self.image_path, 
-                         split = "test", num_upperbound = args.num_upperbound)
+# class RelationalDataset1O(RelationalDataset):
+#     path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
+#     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
+#     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
+#         super().__init__(self.path, 
+#                          uncond_image_type=uncond_image_type, 
+#                          center_crop=center_crop, 
+#                          pick_one_relation=pick_one_relation, 
+#                          image_path=self.image_path, 
+#                          split = "test", num_upperbound = args.num_upperbound)
                          
 
 class RelationalDataset3O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_old.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
         super().__init__(self.path, 
@@ -55,7 +51,7 @@ class RelationalDataset3O(RelationalDataset):
                          image_path=self.image_path, 
                          split = "test", num_upperbound = args.num_upperbound)
 class RelationalDataset4O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_old.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
         super().__init__(self.path, 
@@ -66,8 +62,8 @@ class RelationalDataset4O(RelationalDataset):
                          split = "test", num_upperbound = args.num_upperbound)
 
 class RelationalDataset5O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old_imgs/1.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
         super().__init__(self.path, 
                          uncond_image_type=uncond_image_type, 
@@ -77,8 +73,8 @@ class RelationalDataset5O(RelationalDataset):
                          split = "test", num_upperbound = args.num_upperbound)
 
 class RelationalDataset8O(RelationalDataset):
-    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old.npz'
-    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old_imgs/1.npz'
+    path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz'
+    image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_imgs/1.npz'
     def __init__(self, uncond_image_type="original", center_crop=True, pick_one_relation=False, args = None):
         super().__init__(self.path, 
                          uncond_image_type=uncond_image_type, 
@@ -149,7 +145,7 @@ class EvalInfo:
         for i in range(6):
             print(f"{self.relation_names[i]}: {self.correct_relations[i]} / {self.total_relations[i]}")
 
-def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = False, repeat = 8, wandb_drawer = None, args = None):
+def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = False, wandb_drawer = None, args = None):
     accelerator = trainer.accelerator
     device = accelerator.device
     scores = []
@@ -170,6 +166,7 @@ def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = 
         
 
         if show_off_mode:
+            repeat = args.repeat
             objects = [item for item in objects for _ in range(repeat)][:trainer.eval_batch_size]
             relations = [item for item in relations for _ in range(repeat)][:trainer.eval_batch_size]
             relations_ids = [item for item in relations_ids for _ in range(repeat)][:trainer.eval_batch_size]
@@ -200,7 +197,7 @@ def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = 
                     image = bbox.draw(image, color=colours[j % len(colours)])
                 
                 if args.with_scene_graph:
-                    from dataset import draw_scene_graph
+                    from dataset_clevr_ryan import draw_scene_graph
                     scene_graph = draw_scene_graph(objects[i], relations[i], relations_ids[i])
                     image = combine_images(image, scene_graph)
 
@@ -223,13 +220,13 @@ def eval(trainer, single_image_eval, data_loader, dataset_step, show_off_mode = 
             wandb_drawer.log({"acc": avg_score}, step = dataset_step)
         return avg_score
 
-def evaluate(dataset_type, metric, threshold = 0.5, epoch = 90, wandb_drawer = None, args = None):
-    print(f"evaluating model (epoch={epoch}) with data={dataset_type}, metric={metric}")
+def evaluate(dataset_type, metric, threshold = 0.5, wandb_drawer = None, args = None):
+    print(f"evaluating model (epoch={args.epoch}) with data={dataset_type}, metric={metric}")
     if metric == 'relation_classifier':
         sys.path.append('../bbox_classifier/')
         from classifier import BboxClassifier
         metric_model = BboxClassifier()
-        metric_model.load_state_dict(torch.load('../bbox_classifier/4-layer-DNN-48_multi_rels-100.pth'))
+        metric_model.load_state_dict(torch.load('../bbox_classifier/' + args.eval_model_pth))
         def single_image_eval(bboxes, relations, relations_ids, eval_info = EvalInfo()):
             # print("entered single image eval")
             correct_relations = 0
@@ -237,7 +234,6 @@ def evaluate(dataset_type, metric, threshold = 0.5, epoch = 90, wandb_drawer = N
                 (a, b) = relations_ids[i]
                 a = a.item()
                 b = b.item()
-                # print("?", bboxes[a],bboxes[b], rel)
                 rel_id = rel[-1]
                 input = torch.concat([bboxes[a].cuda(), bboxes[b].cuda(), torch.tensor([rel_id]).cuda()])
                 input = input.cuda()
@@ -291,27 +287,26 @@ def evaluate(dataset_type, metric, threshold = 0.5, epoch = 90, wandb_drawer = N
             dataset_type = args.train_dataset_type,
             wandb_drawer = False,
             eval_batch_size = args.batch_size,
-            name = f"multi_rel",
+            name = f"bbox-diffusion1.0",
         )
     
-    # signature = f"{args.model_name}-{args.metric}-{args.num_upperbound}-{dataset_type}-{epoch}"
-
-    trainer.load(epoch)
+    trainer.load(args.epoch)
     # print(f"loaded model", trainer.device)
 
     eval_dataset = EvalAdaptedDataset(dataset)
     eval_dataloader = DataLoader(eval_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_adapted)
     
-    eval(trainer, single_image_eval, eval_dataloader, dataset_type, show_off_mode = True, repeat = 8, wandb_drawer = wandb_drawer, args = args)
+    eval(trainer, single_image_eval, eval_dataloader, dataset_type, show_off_mode = True, wandb_drawer = wandb_drawer, args = args)
     eval(trainer, single_image_eval, eval_dataloader, dataset_type, show_off_mode = False, wandb_drawer = wandb_drawer, args = args)
 
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='eval pipeline')
-    parser.add_argument('--epoch', default=90, type=int)
+    parser.add_argument('--epoch', default=272, type=int)
     parser.add_argument('--batch_size', default=32, type=int, help='size of batch of input to use')
     parser.add_argument('--num_upperbound', default=200, type=int)
+    parser.add_argument('--eval_model_pth', type=str, default='4-layer-DNN-48_multi_rels-400.pth')
     parser.add_argument('--metric', type=str, default='relation_classifier', help='metric to use')
     parser.add_argument('--model_name', type=str, default='both', help='name of the model tested')
     parser.add_argument('--wandb', default=False, action='store_true', help='use wandb')
@@ -320,7 +315,8 @@ if __name__ == '__main__':
     parser.add_argument('--train_dataset_type', type=str, default='CLEVR_2O')
     parser.add_argument('--eval_from', default = 2, type = int)
     parser.add_argument('--eval_to', default = 9, type = int)
-    parser.add_argument('--with_scene_graph', default=False, action='store_true')
+    parser.add_argument('--repeat', default = 4, type = int)
+    parser.add_argument('--with_scene_graph', default=True, action='store_true')
     
     args, unknown = parser.parse_known_args()
 

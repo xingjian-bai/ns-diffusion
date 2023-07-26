@@ -57,23 +57,23 @@ class RelationClassifierDataset(Dataset):
     def __init__(self, dataset_type = "train", args = None):
         self.datasets = []
         if dataset_type == "train":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz', split = "train"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz', split = "train"))
             if args.train_on_multi_rels:
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_old.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_old.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old.npz', split = "train"))
+                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz', split = "train"))
+                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz', split = "train"))
+                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz', split = "train"))
+                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz', split = "train"))
                 
         elif dataset_type == "2O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs.npz', split = "test"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz', split = "test"))
         elif dataset_type == "3O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_old.npz', split = "test"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz', split = "test"))
         elif dataset_type == "4O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_old.npz', split = "test"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz', split = "test"))
         elif dataset_type == "5O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_old.npz', split = "test"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz', split = "test"))
         elif dataset_type == "8O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_old.npz', split = "test"))
+            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz', split = "test"))
         else:
             raise NotImplementedError
         self.dataset_type = dataset_type
@@ -103,7 +103,7 @@ class RelationClassifierDataset(Dataset):
         return self.inputs[index], self.labels[index]
 
 
-def trainer(model, train_dataset, test_datasets, epochs=400, batch_size=32, lr=0.001, device="cuda", use_wandb = False, args = None):
+def trainer(model, train_dataset, test_datasets, epochs=400, batch_size=128, lr=0.001, device="cuda", use_wandb = False, args = None):
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
     test_loaders = [DataLoader(test_dataset, batch_size=128, shuffle=False) for test_dataset in test_datasets]
 
@@ -118,7 +118,7 @@ def trainer(model, train_dataset, test_datasets, epochs=400, batch_size=32, lr=0
         wandb.init(project="relational-classifier", name = wandb_name, save_code = True)
 
     # Training Loop
-    for epoch in range(100):  # number of epochs, adjust as needed
+    for epoch in range(epochs):  # number of epochs, adjust as needed
         running_loss = 0.0
         correct_predictions = 0
         total_predictions = 0
