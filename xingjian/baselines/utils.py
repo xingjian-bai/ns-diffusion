@@ -140,3 +140,14 @@ def divisible_by(numer, denom):
 
 def identity(t, *args, **kwargs):
     return t
+
+def mask_to_string(mask):
+    # mask is tensor
+
+    s = ""
+    for i in range(128):
+        for j in range(128):
+            
+            s += str(int(mask[i][j].item()))
+        s += '\n'
+    return s

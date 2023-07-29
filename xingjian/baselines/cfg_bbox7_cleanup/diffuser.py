@@ -21,7 +21,7 @@ from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
 import sys
 sys.path.append('../')
-from dataset import BoundingBox
+from dataset_clevr_ryan import BoundingBox
 from utils import *
 
 from tqdm.auto import tqdm
@@ -216,7 +216,8 @@ class GaussianDiffusion1D(nn.Module):
         x_start = preds.pred_x_start
 
         if clip_denoised:
-            x_start.clamp_(-5., 5.)
+            # print("attention!!! x_start.clamp_(-1., 1.) instead of 5")
+            x_start.clamp_(-1., 1.)
 
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(x_start = x_start, x_t = x, t = t)
         return model_mean, posterior_variance, posterior_log_variance, x_start
@@ -233,27 +234,32 @@ class GaussianDiffusion1D(nn.Module):
 
     @torch.no_grad()
     def p_sample_loop(self, batch_size, shape, inp, cond, mask):
+        """
+            inp: input conditions (on obj and rel)
+            cond: bounding boxes
+        """
         device = self.betas.device
 
         if not hasattr(self.model, 'randn'):
             img = torch.randn((batch_size, *shape), device=device)
         else:
             raise NotImplementedError
-            img = self.model.randn(batch_size, shape, inp, device)
+            # img = self.model.randn(batch_size, shape, inp, device)
             
 
         x_start = None
 
         if mask is not None:
-            img = img * (1 - mask) + cond * mask
+            raise NotImplementedError
+            # img = img * (1 - mask) + cond * mask
 
         for t in tqdm(reversed(range(0, self.num_timesteps)), desc = 'sampling loop time step', total = self.num_timesteps, disable = True):
             self_cond = x_start if self.self_condition else None
 
             img, x_start = self.p_sample(inp, img, t, self_cond)
 
-            if mask is not None:
-                img = img * (1 - mask) + cond * mask
+            # if mask is not None:
+            #     img = img * (1 - mask) + cond * mask
 
             # if t < 50:
             # batched_times = torch.full((img.shape[0],), t, device = inp.device, dtype = torch.long)
@@ -298,6 +304,11 @@ class GaussianDiffusion1D(nn.Module):
 
     @torch.no_grad()
     def sample(self, x, label, mask, batch_size = 16):
+        """
+            x: input conditions (on obj and rel)
+            label: bounding boxes
+            mask: never use
+        """
         # seq_length, channels = self.seq_length, self.channels
         sample_fn = self.p_sample_loop if not self.is_ddim_sampling else self.ddim_sample
         return sample_fn(batch_size, self.out_shape, x, label, mask)

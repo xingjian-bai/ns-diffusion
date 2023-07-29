@@ -10,28 +10,20 @@ from torch.utils.data import Dataset, DataLoader
 
 import sys
 sys.path.append('../')
-from dataset_clevr_ryan import RelationalDataset1O
+from dataset_clevr_ryan import RelationalDataset1O, RelationalDataset2O
 
 
 class AdaptedDataset(Dataset):
     def __init__(self, dataset="CLEVR_1O"):
-        # if dataset == "CLEVR_2O":
-        #     self.data = RelationalDataset2O()
-        #     self.obj_num = 2
-        # elif dataset == "CLEVR_1O":
-        #     self.data = RelationalDataset1O()
-        #     self.obj_num = 1
-        # elif dataset == "CLEVR_3O":
-        #     self.data = RelationalDataset3O()
-        #     self.obj_num = 3
-        # elif dataset == "CLEVR_4O":
-        #     self.data = RelationalDataset4O()
-        #     self.obj_num = 4
-        # else:
-        #     raise NotImplementedError
-
-        assert dataset == "CLEVR_1O"
-        self.data = RelationalDataset1O()
+        super().__init__()
+        if dataset == "CLEVR_1O":
+            self.data = RelationalDataset1O()
+            sekf.obj_num = 1
+        elif dataset == "CLEVR_2O":
+            self.data = RelationalDataset2O()
+            self.obj_num = 2
+        else:
+            raise ValueError(f"dataset {dataset} not supported")
 
         print(f"in adopted dataset, finished loading {len(self.data)} data")
         
@@ -50,18 +42,17 @@ class AdaptedDataset(Dataset):
 
         return clean_image, objects, labels, relations, relations_ids
 
-# def collate_adapted(batch):
-#     objects_batch = []
-#     relations_batch = []
-#     labels_batch = []
-#     prompt_batch = []
-#     image_batch = []
-#     relations_ids_batch = []
-#     for (objects, relations, labels, prompt, image, relations_ids) in batch:
-#         objects_batch.append(objects)
-#         relations_batch.append(relations)
-#         labels_batch.append(labels)
-#         prompt_batch.append(prompt)
-#         image_batch.append(image)
-#         relations_ids_batch.append(relations_ids)
-#     return objects_batch, relations_batch, torch.stack(labels_batch), prompt_batch, image_batch, relations_ids_batch
+def collate_adapted(batch):
+    clean_image_batch = []
+    objects_batch = []
+    bboxes_batch = []
+    relations_batch = []
+    relations_ids_batch = []
+
+    for (clean_image, objects, labels, relations, relations_ids) in batch:
+        clean_image_batch.append(clean_image)
+        objects_batch.append(objects)
+        bboxes_batch.append(labels)
+        relations_batch.append(relations)
+        relations_ids_batch.append(relations_ids)
+    return torch.stack(clean_image_batch), torch.stack(objects_batch), torch.stack(bboxes_batch), relations_batch, relations_ids_batch

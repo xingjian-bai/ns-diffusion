@@ -3,8 +3,10 @@ dataset
 blender*
 
 *.sh
-*.npz
+*.npzcd
 *.pth
+*.pkl
+*.npz
 images
 
 /xingjian/Compositional*
@@ -12,14 +14,18 @@ images
 /xingjian/home2
 /xingjian/miniconda3
 /xingjian/reduce*
+/xingjian/GLIGEN
+/xingjian/datasets
+/xingjian/denoising-diffusion-pytorch
 
 
 .vscode
 
 *wandb*
 *__pycache__*
-*slurm-*.out*
+*slurm-*.out
 *ryan-clevr*
 
-results
-old_model_pts
+*results*
+*old_model_pts*
+*weights*

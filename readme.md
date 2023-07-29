@@ -24,4 +24,16 @@ Adapted from Jiayuan's code. Not factorized, has bugs in size normalization
 
 
 ### bbox_classifier
-- classify relations based on 
+- classify relations based on bboxes.
+- Trained on multi-object scenes, as the core part of bbox-evaluation pipeline
+
+
+## New start: bbox-to-image generation
+### cond_image0
+- unconditional generation
+### cond_image1
+- conditioned on object feature and bounding box.
+- Train 1-obj scene; train on 2-obj-scene with composition.
+
+
+

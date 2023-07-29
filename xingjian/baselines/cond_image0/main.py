@@ -8,6 +8,7 @@ import random
 import math
 import torch
 from torch.utils.data import Dataset, DataLoader
+from multiprocessing import cpu_count
 # from image_adapted_dataset import
 # from models import BiDenoise
 
@@ -38,9 +39,9 @@ if __name__ == "__main__":
         wandb_drawer = None
 
 
-    from dataset_image_adopted import AdaptedDataset
+    from dataset_image_adopted import AdaptedDataset, collate_adapted
     dataset = AdaptedDataset(dataset=args.dataset)
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers=1)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
 
     model = Unet(
         dim = 64,
@@ -62,9 +63,8 @@ if __name__ == "__main__":
         diffusion,
         dataset_type = args.dataset,
         dataloader = dataloader,
-        train_batch_size = 16,
         train_lr = 8e-5,
-        train_num_steps = 700000,         # total training steps
+        train_num_steps = 1000000,         # total training steps
         gradient_accumulate_every = 2,    # gradient accumulation steps
         ema_decay = 0.995,                # exponential moving average decay
         amp = True,                       # turn on mixed precision

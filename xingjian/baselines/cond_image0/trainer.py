@@ -78,7 +78,7 @@ class Trainer(object):
         real_dataset_name = None,
         dataset: Dataset = None,
         dataloader: DataLoader = None,
-        train_batch_size = 16,
+        train_batch_size = 64,
         eval_batch_size = 8,
         gradient_accumulate_every = 1,
         augment_horizontal_flip = True,
@@ -87,7 +87,7 @@ class Trainer(object):
         ema_update_every = 10,
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
-        save_and_sample_every = 200,
+        save_and_sample_every = 250,
         num_samples = 25,
         results_folder = './results',
         amp = False,
@@ -257,7 +257,7 @@ class Trainer(object):
         step_limit = self.train_num_steps + self.step
         with tqdm(initial = self.step, total = step_limit, disable = not accelerator.is_main_process, dynamic_ncols = True) as pbar:
 
-            tqdm_update_freq = 50 
+            tqdm_update_freq = 10 
 
             while self.step < step_limit:
                 total_loss = 0.
@@ -268,7 +268,9 @@ class Trainer(object):
                     if self.dataset_type == 'CLEVR_1O' or self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O':
                         # in image generation, all needed are images, objects, bboxes, relations, relations_ids
                         images, objects, bboxes, relations, relations_ids = data
-                        images, objects, bboxes, relations, relations_ids = images.to(device), objects.to(device), bboxes.to(device), relations.to(device), relations_ids.to(device)
+                        images, objects, bboxes = images.to(device), objects.to(device), bboxes.to(device)
+                        relations = [relation.to(device) for relation in relations]
+                        relations_ids = [relation_id.to(device) for relation_id in relations_ids]
                         # inp = (objects, relations, relations_ids)
                         # mask = None
                     else:
@@ -330,15 +332,14 @@ class Trainer(object):
                         assert all_sampled_images.shape[0] == self.eval_batch_size, "all_sampled_images has wrong shape!"
                         # print("type of all_sampled_images: ", type(all_sampled_images), type(all_sampled_images[0]))
                         if self.wandb_drawer:
-                            self.wandb_drawer.log({"generated-ts": [wandb.Image(image) for image in all_sampled]}, step = self.step)
-                            self.wandb_drawer.log({"generated-pil": [wandb.Image(tensor_to_pil(image)) for image in all_sampled_images]}, step = self.step)
+                            # MUST convert to PIL, to avoid normalization
+                            self.wandb_drawer.log({"generated": [wandb.Image(tensor_to_pil(image)) for image in all_sampled_images]}, step = self.step)
+                            
+                            # log some samples for one time
+                            if self.step == self.save_and_sample_every:
+                                self.wandb_drawer.log({"given": [wandb.Image(tensor_to_pil(image)) for image in images_eval]}, step = self.step)
 
-                            self.wandb_drawer.log({"given-ts": [wandb.Image(image) for image in images_eval]}, step = self.step)
-                            self.wandb_drawer.log({"given-pil": [wandb.Image(tensor_to_pil(image)) for image in images_eval]}, step = self.step)
-                            self.wandb_drawer.log({"given-ts2": [wandb.Image(pil_to_tensor(tensor_to_pil(image))) for image in images_eval]}, step = self.step)
-                            self.wandb_drawer.log({"given-pil2": [wandb.Image(tensor_to_pil(pil_to_tensor(tensor_to_pil(image)))) for image in images_eval]}, step = self.step)
-
-                        utils.save_image(all_sampled_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                        # utils.save_image(all_sampled_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
 
                         # whether to calculate fid
 

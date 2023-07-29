@@ -52,28 +52,28 @@ class BboxClassifier(nn.Module):
         return f"4-layer-DNN-{self.nn_size}"
 import sys
 sys.path.append('../')
-from dataset import RelationalDataset
+from dataset_clevr_ryan import *
 class RelationClassifierDataset(Dataset):
     def __init__(self, dataset_type = "train", args = None):
         self.datasets = []
         if dataset_type == "train":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz', split = "train"))
+            self.datasets.append(RelationalDataset2O())
             if args.train_on_multi_rels:
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz', split = "train"))
-                self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz', split = "train"))
+                self.datasets.append(RelationalDataset3O())
+                self.datasets.append(RelationalDataset4O())
+                self.datasets.append(RelationalDataset5O())
+                self.datasets.append(RelationalDataset8O())
                 
         elif dataset_type == "2O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz', split = "test"))
+            self.datasets.append(RelationalDataset2O(split = "test"))
         elif dataset_type == "3O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz', split = "test"))
+            self.datasets.append(RelationalDataset3O(split = "test"))
         elif dataset_type == "4O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz', split = "test"))
+            self.datasets.append(RelationalDataset4O(split = "test"))
         elif dataset_type == "5O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz', split = "test"))
+            self.datasets.append(RelationalDataset5O(split = "test"))
         elif dataset_type == "8O-test":
-            self.datasets.append(RelationalDataset('/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz', split = "test"))
+            self.datasets.append(RelationalDataset8O(split = "test"))
         else:
             raise NotImplementedError
         self.dataset_type = dataset_type
@@ -178,7 +178,13 @@ if __name__ == "__main__":
     parser.add_argument("--nn_size", type=int, default=48)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--train_on_multi_rels", action="store_true")
+    parser.add_argument('--GPU', default=None, type=str, help='#GPU to use')
     args = parser.parse_args()
+
+
+    if args.GPU is not None:
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.GPU
 
     model = BboxClassifier(nn_size = args.nn_size)
     train_dataset = RelationClassifierDataset(args = args)

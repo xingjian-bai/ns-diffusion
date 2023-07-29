@@ -25,6 +25,8 @@ parser.add_argument('--no_obj', default=False, action='store_true', help='use wa
 parser.add_argument('--rel_only', default=False, action='store_true', help='use wandb')
 parser.add_argument('--obj_only', default=False, action='store_true', help='use wandb')
 
+parser.add_argument('--GPU', default=None, type=str, help='#GPU to use')
+
 
 def train_on(FLAGS, dataset_name, model, steps=1000000, wandb_drawer = None, global_step = 0):
     dataset = AdaptedDataset(dataset=dataset_name)
@@ -62,6 +64,10 @@ def train_on(FLAGS, dataset_name, model, steps=1000000, wandb_drawer = None, glo
 
 if __name__ == "__main__":
     FLAGS = parser.parse_args()
+
+    if FLAGS.GPU is not None:
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.GPU
 
     
 
