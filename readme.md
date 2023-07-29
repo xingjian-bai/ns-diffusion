@@ -35,5 +35,6 @@ Adapted from Jiayuan's code. Not factorized, has bugs in size normalization
 - conditioned on object feature and bounding box.
 - Train 1-obj scene; train on 2-obj-scene with composition.
 
-
-
+### cond_image2
+- conditioned on object, or relation, or baoth
+- added a global diffusion to train together
