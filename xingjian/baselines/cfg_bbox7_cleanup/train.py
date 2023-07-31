@@ -91,13 +91,14 @@ if __name__ == "__main__":
         
     elif FLAGS.dataset == "mixed234":
         global_step = 0
+        step_per_dataset = 1000
         while True:
-            train_on(FLAGS, "CLEVR_2O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
-            global_step += 1000
-            train_on(FLAGS, "CLEVR_3O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
-            global_step += 1000
-            train_on(FLAGS, "CLEVR_4O", model,steps=10000, wandb_drawer = wandb_drawer, global_step = global_step)
-            global_step += 1000
+            train_on(FLAGS, "CLEVR_2O", model,steps=step_per_dataset, wandb_drawer = wandb_drawer, global_step = global_step)
+            global_step += step_per_dataset
+            train_on(FLAGS, "CLEVR_3O", model,steps=step_per_dataset, wandb_drawer = wandb_drawer, global_step = global_step)
+            global_step += step_per_dataset
+            train_on(FLAGS, "CLEVR_4O", model,steps=step_per_dataset, wandb_drawer = wandb_drawer, global_step = global_step)
+            global_step += step_per_dataset
     else:
         raise ValueError('Dataset not supported')
     

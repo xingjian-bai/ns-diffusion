@@ -54,46 +54,46 @@ import sys
 sys.path.append('../')
 from dataset_clevr_ryan import *
 class RelationClassifierDataset(Dataset):
+    def feed_in(self, dataset):
+        for (id, raw_relations) in enumerate(dataset.all_raw_relations):
+            bboxes = dataset.bboxes[id]
+            for i in range (len(raw_relations)):
+                for j in range (len(raw_relations[i])):
+                    if i == j:
+                        continue
+                    for (k, val) in enumerate(raw_relations[i][j]):
+                        input = torch.concat([bboxes[i].tensorize(), bboxes[j].tensorize(), torch.tensor([k])])
+                        label = torch.tensor([1. if val else 0])
+                        self.inputs.append(input)
+                        self.labels.append(label)
+
     def __init__(self, dataset_type = "train", args = None):
-        self.datasets = []
+        self.inputs = []
+        self.labels = []
         if dataset_type == "train":
-            self.datasets.append(RelationalDataset2O())
+            self.feed_in(RelationalDataset2O(mask = False))
             if args.train_on_multi_rels:
-                self.datasets.append(RelationalDataset3O())
-                self.datasets.append(RelationalDataset4O())
-                self.datasets.append(RelationalDataset5O())
-                self.datasets.append(RelationalDataset8O())
+                self.feed_in(RelationalDataset3O(mask = False))
+                self.feed_in(RelationalDataset4O(mask = False))
+                self.feed_in(RelationalDataset5O(mask = False))
+                self.feed_in(RelationalDataset8O(mask = False))
                 
         elif dataset_type == "2O-test":
-            self.datasets.append(RelationalDataset2O(split = "test"))
+            self.feed_in(RelationalDataset2O(split = "test", mask = False))
         elif dataset_type == "3O-test":
-            self.datasets.append(RelationalDataset3O(split = "test"))
+            self.feed_in(RelationalDataset3O(split = "test", mask = False))
         elif dataset_type == "4O-test":
-            self.datasets.append(RelationalDataset4O(split = "test"))
+            self.feed_in(RelationalDataset4O(split = "test", mask = False))
         elif dataset_type == "5O-test":
-            self.datasets.append(RelationalDataset5O(split = "test"))
+            self.feed_in(RelationalDataset5O(split = "test", mask = False))
         elif dataset_type == "8O-test":
-            self.datasets.append(RelationalDataset8O(split = "test"))
+            self.feed_in(RelationalDataset8O(split = "test", mask = False))
         else:
             raise NotImplementedError
         self.dataset_type = dataset_type
 
         # enumerate all elements in the dataset
-        self.inputs = []
-        self.labels = []
-        for dataset in self.datasets:
-            for (id, raw_relations) in enumerate(dataset.all_raw_relations):
-                bboxes = dataset.bboxes[id]
-                for i in range (len(raw_relations)):
-                    for j in range (len(raw_relations[i])):
-                        if i >= j:
-                            continue
-                        for (k, val) in enumerate(raw_relations[i][j]):
-                            input = torch.concat([bboxes[i].tensorize(), bboxes[j].tensorize(), torch.tensor([k])])
-                            label = torch.tensor([1. if val else 0])
-                            self.inputs.append(input)
-                            self.labels.append(label)
-                        
+        
         print(f"prepared dataset {dataset_type}, len = {len(self.inputs)}")
         
     def __len__(self):
@@ -115,7 +115,7 @@ def trainer(model, train_dataset, test_datasets, epochs=400, batch_size=128, lr=
 
     if use_wandb:
         wandb_name = f"{model.get_name()}" + ("_multi_rels" if args.train_on_multi_rels else "")
-        wandb.init(project="relational-classifier", name = wandb_name, save_code = True)
+        wandb.init(project="relational-classifier-above&below", name = wandb_name, save_code = True)
 
     # Training Loop
     for epoch in range(epochs):  # number of epochs, adjust as needed

@@ -108,9 +108,11 @@ class Trainer(object):
         wandb_drawer = None,
         name = 'default-trainer',
         starting_step = 0,
+        args = None,
     ):
         super().__init__()
         self.date = datetime.datetime.now().strftime("%m%d")
+        self.args = args
         # accelerator
 
         self.accelerator = Accelerator(
@@ -150,7 +152,7 @@ class Trainer(object):
         self.wandb_drawer = wandb_drawer
         self.name = name
         self.dataset_type = dataset_type
-        if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O' or dataset_type == 'Mix123':
+        if dataset_type == 'CLEVR_1O' or dataset_type == 'CLEVR_2O' or dataset_type == 'CLEVR_3O' or dataset_type == 'CLEVR_4O' or dataset_type == 'CLEVR_5O' or dataset_type == 'CLEVR_8O' or dataset_type == 'mix123':
             print(f"in trainer, loaded {dataset_type}")
             dl = dataloader
             dl = self.accelerator.prepare(dl)
@@ -221,6 +223,7 @@ class Trainer(object):
         # self.save_best_and_latest_only = save_best_and_latest_only
         print(f"in trainer, finished init")
 
+
     @property
     def device(self):
         return self.accelerator.device
@@ -262,8 +265,29 @@ class Trainer(object):
 
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
+    
+    def direct_load(self, file_name):
+        accelerator = self.accelerator
+        device = accelerator.device
 
-    def train(self):
+        print(f"in trainer, direct load, file is at {f'weights/{file_name}.pt'}")
+        data = torch.load(f'weights/{file_name}.pt', map_location=device)
+
+        model = self.accelerator.unwrap_model(self.model)
+        model.load_state_dict(data['model'])
+
+        self.step = data['step']
+        self.opt.load_state_dict(data['opt'])
+        if self.accelerator.is_main_process:
+            self.ema.load_state_dict(data["ema"])
+
+        if 'version' in data:
+            print(f"loading from version {data['version']}")
+
+        if exists(self.accelerator.scaler) and exists(data['scaler']):
+            self.accelerator.scaler.load_state_dict(data['scaler'])
+
+    def train(self, eval = False):
         accelerator = self.accelerator
         device = accelerator.device
         end_time = time.time()
@@ -274,12 +298,12 @@ class Trainer(object):
             tqdm_update_freq = 1 
 
             while self.step < step_limit:
-                total_loss = 0.
 
+                total_loss = 0.
                 for _ in range(self.gradient_accumulate_every):
                     data = next(self.dl)
-
-                    if self.dataset_type == 'CLEVR_1O' or self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O' or self.dataset_type == 'CLEVR_5O' or self.dataset_type == 'Mix123':
+                    print("dataset_type:", self.dataset_type)
+                    if self.dataset_type == 'CLEVR_1O' or self.dataset_type == 'CLEVR_2O' or self.dataset_type == 'CLEVR_3O' or self.dataset_type == 'CLEVR_4O' or self.dataset_type == 'CLEVR_5O' or self.dataset_type == 'CLEVR_8O' or self.dataset_type == 'Mix123':
                         # in image generation, all needed are images, objects, bboxes, relations, relations_ids
                         images, objects, bboxes, relations, relations_ids, obj_masks, rel_masks = data
                         images = images.to(device)
@@ -291,54 +315,60 @@ class Trainer(object):
                         rel_masks = [rel_mask.to(device) for rel_mask in rel_masks]
 
                         objects_combined = [torch.cat((object, bbox), dim=-1) for object, bbox in zip(objects, bboxes)]
+                        conds = (objects_combined, relations, relations_ids, obj_masks, rel_masks)
                     else:
                         print("dataset type not supported", self.dataset_type)
                         raise NotImplementedError
                     
+                    if eval:
+                        break
+
+
                     data_time = time.time() - end_time; end_time = time.time()
 
                     with self.accelerator.autocast():
-                        conds = (objects_combined, relations, relations_ids, obj_masks, rel_masks)
+                        
                         loss = self.model(conds, images)
                         loss = loss / self.gradient_accumulate_every
                         total_loss += loss.item()
 
                     self.accelerator.backward(loss)
 
-                accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                pbar.set_description(f'loss: {total_loss:.4f}')
+                if not eval:
+                    accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    pbar.set_description(f'loss: {total_loss:.4f}')
 
-                accelerator.wait_for_everyone()
+                    accelerator.wait_for_everyone()
 
-                self.opt.step()
-                self.opt.zero_grad()
+                    self.opt.step()
+                    self.opt.zero_grad()
 
-                accelerator.wait_for_everyone()
+                    accelerator.wait_for_everyone()
 
-                nn_time = time.time() - end_time; end_time = time.time()
+                    nn_time = time.time() - end_time; end_time = time.time()
                 
-                if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
-                    pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
-                    pbar.update(tqdm_update_freq)
-                if self.wandb_drawer:
-                    self.wandb_drawer.log({"loss": total_loss, "step": self.step}, step = self.step)
+                    if self.step % tqdm_update_freq == 0:  # update progress bar every `update_freq` steps
+                        pbar.set_description(f'loss: {total_loss:.4f} data_time: {data_time:.2f} nn_time: {nn_time:.2f}')
+                        pbar.update(tqdm_update_freq)
+                    if self.wandb_drawer:
+                        self.wandb_drawer.log({"loss": total_loss, "step": self.step}, step = self.step)
+                    
+
                 self.step += 1
-
-
                 if accelerator.is_main_process:
                     self.ema.update()
 
-                    if self.step % self.save_model_every == 0:
+                    if self.step % self.save_model_every == 0 and not eval:
                         # save model
                         print("saving the weights...")
                         self.save(self.step)
 
-                    if self.step != 0 and divisible_by(self.step, self.save_and_sample_every):
+                    if divisible_by(self.step, self.save_and_sample_every):
                         self.ema.ema_model.eval()
 
                         print(f"in trainer, entered eval with step={self.step}")
 
-                        def visualize(conds, text = "generated", images = None, bboxes = None):
+                        def visualize(conds, text = "generated", images = None, bboxes = None, step = None):
                             print(f"visualizing {text} images")
                             combined_objects, relations, relations_ids, obj_masks, rel_masks = conds
                             combined_objects = combined_objects[:self.eval_batch_size]
@@ -351,31 +381,69 @@ class Trainer(object):
                                 return
                             with torch.inference_mode():
                                 milestone = self.step // self.save_and_sample_every
-                                all_sampled_images = self.ema.ema_model.sample(conds, batch_size=self.eval_batch_size)
+                                all_sampled_images = self.ema.ema_model.sample(conds, batch_size=self.eval_batch_size, return_all_timesteps = self.args.gif)
                             # MUST convert to PIL, to avoid normalization
                             visualized_images = []
                             # print(f"len of combined_objects: {len(combined_objects)}")
-                            # print(f"len of all_sampled_images: {len(all_sampled_images)}")
+                            print(f"len of all_sampled_images: {len(all_sampled_images)}")
                             for (i, image) in enumerate(all_sampled_images):
-                                image = tensor_to_pil(image)
+                                def annotate_image(gen_image):
+                                    """
+                                        mark bboxes, concat the image with scene graph and original image
+                                    """
+                                    if self.args.gif:
+                                        gen_images = [tensor_to_pil(image) for image in gen_image]
+                                    else:
+                                        gen_image = tensor_to_pil(gen_image)
 
-                                from dataset_clevr_ryan import draw_scene_graph
-                                object = combined_objects[i]
-                                # print("needed: ", object[:, :-4])
-                                scene_graph = draw_scene_graph(object[:, :-4].long(), relations[i], relations_ids[i])
-                                image = combine_images(image, scene_graph)
-                                if images is not None:
-                                    original_image = tensor_to_pil(images[i])
+                                    from dataset_clevr_ryan import draw_scene_graph
+                                    object = combined_objects[i]
+                                    # print("needed: ", object[:, :-4])
+                                    scene_graph = draw_scene_graph(object[:, :-4].long(), relations[i], relations_ids[i])
+                                    if self.args.gif:
+                                        gen_images = [combine_images(image, scene_graph) for image in gen_images]
+                                    else:
+                                        gen_image = combine_images(gen_image, scene_graph)
+
+                                    if images is not None:
+                                        original_image = tensor_to_pil(images[i])
+                                    else:
+                                        original_image = Image.new("RGB", (128, 128), (224, 224, 224))
+                                    if bboxes is not None:
+                                        for bbox_data in bboxes[i]:
+                                            bbox = BoundingBox(bbox_data)
+                                            original_image = bbox.draw(original_image)
+                                    if self.args.gif:
+                                        gen_images = [combine_images(image, original_image) for image in gen_images]
+                                        return gen_images
+                                    else:
+                                        gen_image = combine_images(gen_image, original_image)
+                                        return gen_image
+
+
+                                if not self.args.gif:
+                                    visualized_images.append(annotate_image(image))
                                 else:
-                                    original_image = Image.new("RGB", (128, 128), (224, 224, 224))
-                                if bboxes is not None:
-                                    for bbox_data in bboxes[i]:
-                                        bbox = BoundingBox(bbox_data)
-                                        original_image = bbox.draw(original_image)
-                                image = combine_images(image, original_image)
-                                visualized_images.append(image)
+                                    output_gif_path = f'gifs/{self.get_train_name()}_{text}_sample_{i}.gif'
+                                    
 
-                            self.wandb_drawer.log({f"{text}": [wandb.Image(image) for image in visualized_images]}, step = self.step)
+                                    if len(image) > self.args.gif_frames:
+                                        indices = np.linspace(0, len(image) - 1, self.args.gif_frames, dtype=int)
+                                        image = [image[i] for i in indices]
+                                    
+                                    print("starting to annotate image")
+                                    image_list = annotate_image(image)
+                                    print("finished annotating image")
+                                    frame_duration = max(10000 // len(image_list), 100)
+
+                                    image_list[0].save(output_gif_path, save_all=True, append_images=image_list[1:], optimize=False, duration=frame_duration, loop=0)
+                                    print("saved gif")
+                                    visualized_images.append(wandb.Image(output_gif_path, caption=f"GIF {self.get_train_name()}_{text}_sample_{i}"))
+                                self.wandb_drawer.log({f"{text}": [wandb.Image(image) for image in visualized_images], "step": self.step})
+                                for (i, image) in enumerate(visualized_images):
+                                    image.save(f"images/{self.get_train_name()}_{text}_sample_{i}.png")
+                                print(f"wandb saved {text} images")
+                        
                         
                         visualize(conds, "generated", images = images, bboxes = bboxes)
 
@@ -394,6 +462,8 @@ class Trainer(object):
                         visualize(eval_cond, "eval", images = eval_images, bboxes = eval_bboxes)
 
                         ################RANDOM################
+                        if eval:
+                            return
                         
                         # random_relations = []
                         # random_relations_ids = []
@@ -422,7 +492,7 @@ class Trainer(object):
                         eval_cond = (eval_objects_combined, eval_relations, eval_relations_ids, eval_obj_masks, eval_rel_masks)
                         visualize(eval_cond, "random", bboxes = eval_bboxes)
 
-
+                        
 
                         # for i in range(self.eval_batch_size):
                         #     for j in range(self.obj_num):

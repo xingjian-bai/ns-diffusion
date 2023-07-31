@@ -15,7 +15,7 @@ from torch import nn
 # from models import BiDenoise
 
 parser = argparse.ArgumentParser(description='Train Diffusion Reasoning Model')
-parser.add_argument('--batch_size', default=64, type=int, help='size of batch of input to use')
+parser.add_argument('--batch_size', default=4, type=int, help='size of batch of input to use')
 parser.add_argument('--eval_batch_size', default=4, type=int, help='size of batch of input to use')
 parser.add_argument('--dataset', type=str, default='CLEVR_1O', help='dataset to use')
 parser.add_argument('--wandb', default=False, action='store_true', help='use wandb')
@@ -32,11 +32,13 @@ parser.add_argument('--mask', default=False, action='store_true', help='mask the
 parser.add_argument('--frozen_global', default=None, type=str, help='frozen global diffuser')
 parser.add_argument('--frozen_obj', default=None, type=str, help='frozen obj diffuser')
 parser.add_argument('--frozen_rel', default=None, type=str, help='frozen rel diffuser')
+parser.add_argument('--eval', default=False, action='store_true')
+parser.add_argument('--load_trainer', default=None, type=str, help='load trainer')
+
+parser.add_argument('--gif', default=False, action='store_true')
+parser.add_argument('--gif_frames', default=10, type=int)
 
 if __name__ == "__main__":
-    
-    
-
     args = parser.parse_args()
 
     if args.GPU is not None:
@@ -45,19 +47,7 @@ if __name__ == "__main__":
 
     print(f"arguments: {args}")
     
-    
-
-    
-
-    dataset = AdaptedDataset(dataset=args.dataset)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
-    print(f"loaded train dataset, ", len(dataset))
-
-    eval_dataset = AdaptedDataset(dataset=args.dataset, split="test")
-    eval_dataloader = DataLoader(eval_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
-    print(f"loaded eval dataset, ", len(eval_dataset))
-
-    model = BiCondUnet(no_rel = args.no_rel, no_obj = args.no_obj, no_global = args.no_global, mask_bbox = args.mask)
+    model = BiCondUnet(args = args)
 
     print("in main, prepared model")
 
@@ -72,36 +62,105 @@ if __name__ == "__main__":
         wandb_drawer = None
 
 
-    diffusion = GaussianDiffusion(
-        model,
-        image_size = 128,
-        timesteps = args.diffusion_steps,           # number of steps
-        sampling_timesteps = args.diffusion_steps    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
-    )
+    
     # print("in main, prepared diffusion")
 
+    if args.eval:
+        print(f"in main, evaluating <{args.name}-{args.dataset}.{args.batch_size}-{model.name()}>")
+        datasets = [
+            AdaptedDataset(dataset='CLEVR_1O', split="train", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_2O', split="train", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_3O', split="train", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_4O', split="train", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_5O', split="train", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_8O', split="train", num_upperbound = 16),
+        ]
+        eval_datasets = [
+            AdaptedDataset(dataset='CLEVR_1O', split="test", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_2O', split="test", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_3O', split="test", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_4O', split="test", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_5O', split="test", num_upperbound = 16),
+            AdaptedDataset(dataset='CLEVR_8O', split="test", num_upperbound = 16),
+        ]
+        dataset_names = ['CLEVR_1O', 'CLEVR_2O', 'CLEVR_3O', 'CLEVR_4O', 'CLEVR_5O', 'CLEVR_8O']
+        for dataset, eval_dataset, dataset_name in zip(datasets, eval_datasets, dataset_names):
+            dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
+            eval_dataloader = DataLoader(eval_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
+            print(f"loaded datasets, name is {dataset_name}")
+            
+            diffusion = GaussianDiffusion(
+                model,
+                image_size = 128,
+                timesteps = args.diffusion_steps,           # number of steps
+                sampling_timesteps = args.diffusion_steps    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
+            )
+            trainer = Trainer(
+                diffusion,
+                dataset_type = dataset_name,
+                dataloader = dataloader,
+                eval_dataloader = eval_dataloader,
+                train_batch_size = args.batch_size,
+                eval_batch_size = args.eval_batch_size,
+                train_lr = 8e-5,
+                train_num_steps = 1000000,         # total training steps
+                gradient_accumulate_every = 2,    # gradient accumulation steps
+                ema_decay = 0.995,                # exponential moving average decay
+                amp = True,                       # turn on mixed precision
+                calculate_fid = False,              # whether to calculate fid during training
+                wandb_drawer = wandb_drawer,
+                name = args.name,
+                save_and_sample_every = args.save_every,
+                save_model_every = args.save_model,
+                args = args,
+            )
+            print(f"in main, enter trainer.train()")
+            if args.load_trainer is not None:
+                trainer.direct_load(args.load_trainer)
+                print(f"loaded trainer from {args.load_trainer}")
+            trainer.train(eval=args.eval)
 
-    trainer = Trainer(
-        diffusion,
-        dataset_type = args.dataset,
-        dataloader = dataloader,
-        eval_dataloader = eval_dataloader,
-        train_batch_size = args.batch_size,
-        eval_batch_size = args.eval_batch_size,
-        train_lr = 8e-5,
-        train_num_steps = 1000000,         # total training steps
-        gradient_accumulate_every = 2,    # gradient accumulation steps
-        ema_decay = 0.995,                # exponential moving average decay
-        amp = True,                       # turn on mixed precision
-        calculate_fid = False,              # whether to calculate fid during training
-        wandb_drawer = wandb_drawer,
-        name = args.name,
-        save_and_sample_every = args.save_every,
-        save_model_every = args.save_model,
-    )
+    else:
+        diffusion = GaussianDiffusion(
+            model,
+            image_size = 128,
+            timesteps = args.diffusion_steps,           # number of steps
+            sampling_timesteps = args.diffusion_steps    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
+        )
 
-    print(f"in main, training <{args.name}-{args.dataset}.{args.batch_size}-{model.name()}>")
-    trainer.train()
+        dataset = AdaptedDataset(dataset=args.dataset)
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
+        print(f"loaded train dataset, ", len(dataset))
+
+        eval_dataset = AdaptedDataset(dataset=args.dataset, split="test")
+        eval_dataloader = DataLoader(eval_dataset, batch_size=args.eval_batch_size, shuffle=False, num_workers = 0, collate_fn=collate_adapted)
+        print(f"loaded eval dataset, ", len(eval_dataset))
+
+        trainer = Trainer(
+            diffusion,
+            dataset_type = args.dataset,
+            dataloader = dataloader,
+            eval_dataloader = eval_dataloader,
+            train_batch_size = args.batch_size,
+            eval_batch_size = args.eval_batch_size,
+            train_lr = 8e-5,
+            train_num_steps = 1000000,         # total training steps
+            gradient_accumulate_every = 2,    # gradient accumulation steps
+            ema_decay = 0.995,                # exponential moving average decay
+            amp = True,                       # turn on mixed precision
+            calculate_fid = False,              # whether to calculate fid during training
+            wandb_drawer = wandb_drawer,
+            name = args.name,
+            save_and_sample_every = args.save_every,
+            save_model_every = args.save_model,
+            args = args,
+        )
+
+        print(f"in main, training <{args.name}-{args.dataset}.{args.batch_size}-{model.name()}>")
+        if args.load_trainer is not None:
+            trainer.direct_load(args.load_trainer)
+            print(f"loaded trainer from {args.load_trainer}")
+        trainer.train()
 
 # import argparse
 # import random

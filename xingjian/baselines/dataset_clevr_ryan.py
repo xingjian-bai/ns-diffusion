@@ -252,11 +252,11 @@ def prompt(objects = [], relations = []):
 
 def gen_rand_bbox():
 
-    volume = random.uniform(0.1, 0.5)
+    volume = random.uniform(0.04, 0.25)
 
-    ratio = random.uniform(0.25, 4)
+    ratio = random.uniform(0.5, 2)
     while volume * ratio >= 0.9 or volume / ratio >= 0.9:
-        ratio = random.uniform(0.25, 4)
+        ratio = random.uniform(0.5, 2)
 
     w = np.sqrt(volume * ratio)
     h = np.sqrt(volume / ratio)
@@ -301,7 +301,8 @@ def gen_rand_relations(generated_object_num, relation_threshold = 0.05):
 
 def draw_scene_graph(objects, relations, relations_ids = None, resolution = 128):
     #if objects is empty
-    if len(objects) == 0 or isinstance(objects[0], torch.Tensor):
+    # print(objects, objects[0])
+    if len(objects) == 0 or isinstance(objects[0], torch.Tensor) or isinstance(objects[0], np.ndarray) or isinstance(objects[0], list):
         objects = [Object(*obj) for obj in objects]
     if len(relations) == 0 or isinstance(relations[0], torch.Tensor):
         new_relations = []
@@ -392,14 +393,17 @@ class RelationalDataset(Dataset):
                         relations.append(Relation(k, raw_objects[i], raw_objects[j], [i, j], shift = (id - len(ij_rels) / 2) * 5))
         return relations
     
-    def add_mask(self):
-        file_name = self.data_name + self.split + "_masks.pkl"
+    def add_mask(self, data_path = "/viscam/projects/ns-diffusion/xingjian/datasets/clevr_ryan_masks/"):
+        file_name = data_path + self.data_name + self.split + str(self.num) + "_masks.pkl"
         if os.path.exists(file_name):
             with open(file_name, 'rb') as f:
                 self.obj_masks, self.rel_masks = pickle.load(f)
             print(f"loaded pre-calculated masks from {file_name}, with shape {len(self.obj_masks)}, {len(self.rel_masks)}")
-            assert len(self.obj_masks) == self.num
-            assert len(self.rel_masks) == self.num
+            # if self.num_upperbound is not None:
+                # self.obj_masks = self.obj_masks[:self.num_upperbound]
+                # self.rel_masks = self.rel_masks[:self.num_upperbound]
+            # assert len(self.obj_masks) == self.num
+            # assert len(self.rel_masks) == self.num
             return             
         
         print(f"precalculated masks not found in {file_name}, calculating...")
@@ -434,7 +438,8 @@ class RelationalDataset(Dataset):
         num_upperbound = None,
         generated_object_num = 3,
         generated_data_num = 1000,
-        pos_type = "lurb"
+        pos_type = "lurb",
+        mask = True
     ):
         self.center_crop = center_crop
         self.pick_one_relation = pick_one_relation
@@ -481,6 +486,7 @@ class RelationalDataset(Dataset):
         else:
             raise ValueError(f"Invalid split argument: '{split}', expected 'train' or 'test'.")
 
+        self.num_upperbound = num_upperbound
         if num_upperbound is not None and num_upperbound < len(indices):
             # random shuffle and take the first num_upperbound
             # np.random.shuffle(indices)
@@ -499,14 +505,14 @@ class RelationalDataset(Dataset):
         
         # print("? image_path", image_path)
         if "images" in self.data.keys():
-            print("Loading images from data")
+            print(f"{data_name}, Loading images from data")
             self.images = [Image.fromarray(image) for image in self.data['images'][indices]]
         elif image_path is not None:
-            print("Loading images from image_path")
+            print(f"{data_name}, Loading images from image_path")
             self.image_data = np.load(image_path)
             self.images = [Image.fromarray(image) for image in self.image_data['images'][indices]]
         else:
-            print("Empty images")
+            print(f"{data_name}, Empty images")
             self.images = [Image.new("RGB", (128, 128), (255, 255, 255)) for _ in range(len(indices))]
 
         assert len(self.images) == len(self.objects)
@@ -532,7 +538,9 @@ class RelationalDataset(Dataset):
         self.obj_masks = []
         self.rel_masks = []
 
-        self.add_mask()
+        self.mask = mask
+        if mask:
+            self.add_mask()
 
     
 
@@ -578,6 +586,8 @@ class RelationalDataset(Dataset):
         annotated_image_tensor = pil_to_tensor(annotated_image)
         raw_image_tensor = pil_to_tensor(raw_image)
 
+        if not self.mask:
+            raise NotImplementedError
         obj_mask = self.obj_masks[idx]
         rel_mask = self.rel_masks[idx]
         
@@ -587,48 +597,87 @@ class RelationalDataset(Dataset):
 class RelationalDataset1O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_1obj_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1):
-        super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "1O",
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
+        super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "1O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
 
 class RelationalDataset2O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_2objs_balanced_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None):
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
         super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "2O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size, num_upperbound = num_upperbound)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
 
 class RelationalDataset3O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_3objs_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None):
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
         super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "3O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size, num_upperbound = num_upperbound)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
 
 class RelationalDataset4O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_4objs_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None):
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
         super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "4O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size, num_upperbound = num_upperbound)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
 
 class RelationalDataset5O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_5objs_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None):
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
         super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "5O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size, num_upperbound = num_upperbound)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
 
 class RelationalDataset8O(RelationalDataset):
     data_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs.npz'
     image_path = '/viscam/projects/ns-diffusion/dataset/clevr_rel_8objs_imgs/1.npz'
-    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None):
+    def __init__(self, pick_one_relation=False, split = "train", test_size = 0.1, num_upperbound = None, **kwargs):
         super().__init__(data_path = self.data_path, image_path=self.image_path, data_name = "8O", 
                          pick_one_relation=pick_one_relation, 
-                         split = split, test_size = test_size, num_upperbound = num_upperbound)
+                         split = split, test_size = test_size, num_upperbound = num_upperbound, **kwargs)
+
+class Mix123(RelationalDataset):
+    def __init__(self, *args, **kwargs):
+        self.datasets = [
+            RelationalDataset1O(*args, **kwargs),
+            RelationalDataset2O(*args, **kwargs),
+            RelationalDataset3O(*args, **kwargs),
+        ]
+
+        self.uncond_image_type = "original"
+        self.mask = True
+
+        #sum of three length
+        self.num = sum((ds.num for ds in self.datasets))
+
+        # Combine all required variables from all datasets
+        self.images = sum((ds.images for ds in self.datasets), [])
+        self.objects = sum((ds.objects for ds in self.datasets), [])
+        self.bboxes = sum((ds.bboxes for ds in self.datasets), [])
+        self.relations = sum((ds.relations for ds in self.datasets), [])
+        self.annotated_images = sum((ds.annotated_images for ds in self.datasets), [])
+        self.prompts = sum((ds.prompts for ds in self.datasets), [])
+        self.obj_masks = sum((ds.obj_masks for ds in self.datasets), [])
+        self.rel_masks = sum((ds.rel_masks for ds in self.datasets), [])
+
+        # Randomly shuffle the data
+        indices = np.random.permutation(len(self.images))
+        self.images = [self.images[i] for i in indices]
+        self.objects = [self.objects[i] for i in indices]
+        self.bboxes = [self.bboxes[i] for i in indices]
+        self.relations = [self.relations[i] for i in indices]
+        self.annotated_images = [self.annotated_images[i] for i in indices]
+        self.prompts = [self.prompts[i] for i in indices]
+        self.obj_masks = [self.obj_masks[i] for i in indices]
+        self.rel_masks = [self.rel_masks[i] for i in indices]
+
+        self.num = sum(ds.num for ds in self.datasets)
+        self.resolution = self.datasets[0].resolution
+        self.augmentations = self.datasets[0].augmentations
 

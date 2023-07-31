@@ -454,13 +454,14 @@ class Unet_conditional(Unet):
 class BiCondUnet(nn.Module):
     def __init__(self, 
                  composition_type = "add",
-                 no_rel = False, no_obj = False, no_global = False,
-                 mask_bbox = False,):
+                 args = None):
+                #  no_rel = False, no_obj = False, no_global = False,
+                #  mask = False,):
         super().__init__()
-        self.no_rel = no_rel
-        self.no_obj = no_obj
-        self.no_global = no_global
-        self.mask_bbox = mask_bbox
+        self.no_rel = args.no_rel
+        self.no_obj = args.no_obj
+        self.no_global = args.no_global
+        self.mask = args.mask
         self.rel_denoise = Unet_conditional(4 + 4 + 4 + 4 + 1)
         self.obj_denoise = Unet_conditional(4 + 4)
         self.global_denoise = Unet_conditional(0)
@@ -475,7 +476,7 @@ class BiCondUnet(nn.Module):
                 ("o" if not self.no_obj else "") + \
                 ("g" if not self.no_global else "") + \
                 "]" + \
-                ("" if not self.mask_bbox else "[mask]")
+                ("" if not self.mask else "[mask]")
     
     def forward(self, conds, x, time, x_self_cond=None):
         """
@@ -502,23 +503,12 @@ class BiCondUnet(nn.Module):
 
                 obj_outs = self.obj_denoise(object_all, xs, times)
                 
-                if self.mask_bbox:
+                if self.mask:
                     mask = obj_masks[batch_id].unsqueeze(1) # shape obj_num, 1, 128, 128
                     # print("shape of obj mask: ", mask.shape)
                     obj_outs *= mask.expand_as(obj_outs)
                 
                 output_batch[batch_id] += obj_outs.sum(dim=0)
-
-                # for obj_id in range(len(objects[batch_id])):
-                #     object = objects[batch_id][obj_id]
-                #     obj_out = self.obj_denoise(object, x[batch_id], time[batch_id])
-                    
-                #     if self.mask_bbox:
-                #         mask = obj_masks[batch_id][obj_id].unsqueeze(0)
-                #         print("shape of mask: ", mask.shape, ", which should be 1 128 128")
-                #         obj_out *= mask.expand_as(obj_out)
-                    
-                #     output_batch[batch_id] += obj_out
         
         if not self.no_rel:
             for batch_id in range(batch_size):
@@ -526,7 +516,8 @@ class BiCondUnet(nn.Module):
                 xs = x[batch_id].unsqueeze(0).repeat(len(relations[batch_id]), 1, 1, 1)
                 times = time[batch_id].repeat(len(relations[batch_id]))
 
-                
+                if relation_all.shape[0] == 0:
+                    continue
                 object_as = objects[batch_id][relations_ids[batch_id][:, 0]]
                 object_bs = objects[batch_id][relations_ids[batch_id][:, 1]]
                 relation_tensors = relation_all[:, -1].unsqueeze(-1)
@@ -536,7 +527,7 @@ class BiCondUnet(nn.Module):
                 # print("shape of xs:", xs.shape, "shape of times:", times.shape)
                 rel_outs = self.rel_denoise(relation_combined, xs, times)
 
-                if self.mask_bbox:
+                if self.mask:
                     mask = rel_masks[batch_id].unsqueeze(1) # shape rel_num, 1, 128, 128
                     # print("shape of rel mask: ", mask.shape)
                     # mask_str = mask_to_string(mask[0][0])
@@ -544,26 +535,6 @@ class BiCondUnet(nn.Module):
                     rel_outs *= mask.expand_as(rel_outs)
                 
                 output_batch[batch_id] += rel_outs.sum(dim=0)
-
-                # for rel_id in range(len(relations[batch_id])):
-                #     relation = relations[batch_id][rel_id]
-                #     (a, b) = relations_ids[batch_id][rel_id]
-                #     object_a = objects[batch_id, a]
-                #     object_b = objects[batch_id, b]
-                #     relation_tensor = torch.tensor([relation]).to(x.device)
-                #     # concat the two bbox
-                #     print("pre combine,", object_a, object_b, relation_tensor)
-                #     relation_combined = torch.cat((object_a, object_b, relation_tensor), dim=0)
-                #     print("shape of the combined bbox:", relation_combined.shape, "shape of x[]:", x[batch_id].shape, "shape of time[]:", time[batch_id].shape)
-
-                #     rel_out = self.rel_denoise(relation_combined, x[batch_id], time[batch_id])
-                    
-                #     if self.mask_bbox:
-                #         mask = rel_masks[batch_id][rel_id].unsqueeze(0)
-                #         print("shape of mask: ", mask.shape, ", which should be 1 128 128")
-                #         rel_out *= mask.expand_as(rel_out)
-                    
-                #     output_batch[batch_id] += rel_out
         
         if not self.no_global:
             global_out = self.global_denoise(None, x, time)
